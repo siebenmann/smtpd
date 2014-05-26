@@ -9,10 +9,10 @@ import (
 
 // An enumeration of SMTP commands that we recognize, plus BadCmd for
 // 'no such command'.
-type SmtpCmds int
+type Command int
 
 const (
-	NoCmd SmtpCmds = iota // artificial zero value
+	NoCmd Command = iota // artificial zero value
 	BadCmd
 	HELO
 	EHLO
@@ -31,8 +31,8 @@ const (
 // command argument, optional parameter string for ESTMP MAIL FROM and
 // RCPT TO, and an err string if there was an error.
 // The err string is set if there was an error, empty otherwise.
-type SmtpCmd struct {
-	cmd    SmtpCmds
+type ParsedLine struct {
+	cmd    Command
 	arg    string
 	params string // present only on ESMTP MAIL FROM and RCPT TO.
 	err    string
@@ -41,24 +41,26 @@ type SmtpCmd struct {
 // See http://www.ietf.org/rfc/rfc1869.txt for the general discussion of
 // params. We do not parse them.
 
-type smtpArgs int
+type cmdArgs int
 
 const (
-	noArg smtpArgs = iota
+	noArg cmdArgs = iota
 	canArg
 	mustArg
-	colonArg // for ':<addr>[ options...]'
+	colonAddress // for ':<addr>[ options...]'
 )
 
-var smtpCommands = []struct {
-	cmd  SmtpCmds
-	what string
-	arg  smtpArgs
+// Our ideal of what requires an argument is slightly relaxed from the
+// RFCs, ie we will accept argumentless HELO/EHLO.
+var smtpCommand = []struct {
+	cmd     Command
+	text    string
+	argtype cmdArgs
 }{
 	{HELO, "HELO", canArg},
 	{EHLO, "EHLO", canArg},
-	{MAILFROM, "MAIL FROM", colonArg},
-	{RCPTTO, "RCPT TO", colonArg},
+	{MAILFROM, "MAIL FROM", colonAddress},
+	{RCPTTO, "RCPT TO", colonAddress},
 	{DATA, "DATA", noArg},
 	{QUIT, "QUIT", noArg},
 	{RSET, "RSET", noArg},
@@ -69,20 +71,21 @@ var smtpCommands = []struct {
 	// TODO: do I need any additional SMTP commands?
 }
 
-func (v SmtpCmds) String() string {
+// Turn a Command int into a string for debugging et al.
+func (v Command) String() string {
 	switch v {
 	case NoCmd:
-		return "<zero SmtpCmds value>"
+		return "<zero Command value>"
 	case BadCmd:
 		return "<bad SMTP command>"
 	default:
-		for _, c := range smtpCommands {
+		for _, c := range smtpCommand {
 			if c.cmd == v {
-				return fmt.Sprintf("<SMTP '%s'>", c.what)
+				return fmt.Sprintf("<SMTP '%s'>", c.text)
 			}
 		}
 		// ... because someday I may screw this one up.
-		return fmt.Sprintf("<SmtpCmds cmd val %d>", v)
+		return fmt.Sprintf("<Command cmd val %d>", v)
 	}
 }
 
@@ -98,10 +101,10 @@ func isall7bit(b []byte) bool {
 	return true
 }
 
-// Parse a SMTP command line and return a SmtpCmd structure of the
-// result. If there was an error, SmtpCmd.err is non-empty.
-func ParseCmd(line string) SmtpCmd {
-	var res SmtpCmd
+// Parse a SMTP command line and return a ParsedLine structure of the
+// result. If there was an error, ParsedLine.err is non-empty.
+func ParseCmd(line string) ParsedLine {
+	var res ParsedLine
 	res.cmd = BadCmd
 
 	// All valid SMTP commands are either four characters long or have
@@ -126,8 +129,8 @@ func ParseCmd(line string) SmtpCmd {
 	// much easier.
 	found := -1
 	upper := strings.ToUpper(line)
-	for i, _ := range smtpCommands {
-		if strings.HasPrefix(upper, smtpCommands[i].what) {
+	for i, _ := range smtpCommand {
+		if strings.HasPrefix(upper, smtpCommand[i].text) {
 			found = i
 			break
 		}
@@ -140,8 +143,8 @@ func ParseCmd(line string) SmtpCmd {
 	// Validate that we've ended at a word boundary, either a space or
 	// ':'. If we don't, this is not a valid match. Note that we now
 	// work with the original-case line, not the upper-case version.
-	cmd := smtpCommands[found]
-	clen := len(cmd.what)
+	cmd := smtpCommand[found]
+	clen := len(cmd.text)
 	if !(llen == clen || line[clen] == ' ' || line[clen] == ':') {
 		res.err = "unrecognized command"
 		return res
@@ -152,7 +155,7 @@ func ParseCmd(line string) SmtpCmd {
 	// are command argument errors, so we set the command type in our
 	// result.
 	res.cmd = cmd.cmd
-	switch cmd.arg {
+	switch cmd.argtype {
 	case noArg:
 		if llen != clen {
 			res.err = "SMTP command does not take an argument"
@@ -175,7 +178,7 @@ func ParseCmd(line string) SmtpCmd {
 		if llen > clen+1 {
 			res.arg = strings.TrimSpace(line[clen+1:])
 		}
-	case colonArg:
+	case colonAddress:
 		var idx int
 		// Minimum llen is clen + ':<>', three characters
 		if llen < clen+3 {

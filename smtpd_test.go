@@ -8,9 +8,9 @@ import "testing"
 // This should contain only things that are actually valid. Do not test
 // error handling here.
 var smtpValidTests = []struct {
-	line string   // Input line
-	cmd  SmtpCmds // Output SmtpCmd
-	arg  string   // Output argument
+	line string  // Input line
+	cmd  Command // Output SMTP command
+	arg  string  // Output argument
 }{
 	{"HELO localhost", HELO, "localhost"},
 	{"HELO", HELO, ""},
@@ -49,26 +49,26 @@ var smtpValidTests = []struct {
 }
 
 func TestGoodParses(t *testing.T) {
-	var s SmtpCmd
-	for _, src := range smtpValidTests {
-		s = ParseCmd(src.line)
-		if s.cmd != src.cmd {
-			t.Fatalf("mismatched CMD result on '%s': got %v wanted %v", src.line, s.cmd, src.cmd)
+	var s ParsedLine
+	for _, inp := range smtpValidTests {
+		s = ParseCmd(inp.line)
+		if s.cmd != inp.cmd {
+			t.Fatalf("mismatched CMD result on '%s': got %v wanted %v", inp.line, s.cmd, inp.cmd)
 		}
 		if len(s.err) > 0 {
-			t.Fatalf("command failed on '%s': error '%s'", src.line, s.err)
+			t.Fatalf("command failed on '%s': error '%s'", inp.line, s.err)
 		}
-		if src.arg != s.arg {
-			t.Fatalf("mismatched arg results on '%s': got %v expected %v", src.line, s.arg, src.arg)
+		if inp.arg != s.arg {
+			t.Fatalf("mismatched arg results on '%s': got %v expected %v", inp.line, s.arg, inp.arg)
 		}
 	}
 }
 
 // We mostly don't match on the exact error text.
 var smtpInvalidTests = []struct {
-	line string   // Input line
-	cmd  SmtpCmds // Output SmtpCmd
-	err  string   // Output err to check if non-empty
+	line string  // Input line
+	cmd  Command // Output SMTP command
+	err  string  // Output err to check if non-empty
 }{
 	{"argble", BadCmd, ""},
 	// UTF-8, and I want to test that this is specifically recognized
@@ -101,7 +101,7 @@ var smtpInvalidTests = []struct {
 }
 
 func TestBadParses(t *testing.T) {
-	var s SmtpCmd
+	var s ParsedLine
 	for _, inp := range smtpInvalidTests {
 		s = ParseCmd(inp.line)
 		if len(s.err) == 0 {
