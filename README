@@ -1,0 +1,5 @@
+In the future this will be the code for a minimal SMTP daemon that more
+or less accepts everything and logs it but doesn't actually deliver it
+or anything. Chris wants it to soak up spam.
+
+Right now it's bits and pieces that will make up that daemon, someday.
