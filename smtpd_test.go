@@ -172,6 +172,8 @@ func TestBasicSmtpd(t *testing.T) {
 		t.Fatalf("Got:\n%s\nExpected:\n%s", actualout, server)
 	}
 }
+// EHLO, send email, send email again, try what should be an out of
+// sequence RCPT TO.
 var basicClient = `EHLO localhost
 MAIL FROM:<a@b.com>
 RCPT TO:<c@d.org>
@@ -180,6 +182,14 @@ Subject: A test
 
 Done.
 .
+MAIL FROM:<a1@b.com>
+RCPT TO:<c1@d.org>
+DATA
+Subject: A test 2
+
+Done. 2.
+.
+RCPT TO:<e@f.com>
 QUIT
 `
 var basicServer =`220 Hello there
@@ -188,6 +198,11 @@ var basicServer =`220 Hello there
 250 Okay, I'll believe you for now
 354 Send away
 250 I've put it in a can
+250 Okay, I'll believe you for now
+250 Okay, I'll believe you for now
+354 Send away
+250 I've put it in a can
+503 Out of sequence command
 221 Goodbye
 `
 
@@ -197,6 +212,9 @@ func TestSequenceErrors(t *testing.T) {
 		t.Fatalf("Got:\n%s\nExpected:\n%s", actualout, server)
 	}
 }
+// A whole series of out of sequence commands, and finally an unrecognized
+// one. We try a RSET to validate that it doesn't allow us to MAIL FROM
+// without an EHLO.
 var sequenceClient = `MAIL FROM:<a@b.com>
 RSET
 MAIL FROM:<a@b.com>
