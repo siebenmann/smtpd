@@ -3,7 +3,12 @@
 
 package smtpd
 
-import "testing"
+import (
+	"bufio"
+	"bytes"
+	"strings"
+	"testing"
+)
 
 // This should contain only things that are actually valid. Do not test
 // error handling here.
@@ -27,6 +32,8 @@ var smtpValidTests = []struct {
 	{"EXPN fred@example.net", EXPN, "fred@example.net"},
 	{"HELP barney", HELP, "barney"},
 	{"HELP", HELP, ""},
+	{"STARTTLS", STARTTLS, ""},
+	{"AUTH PLAIN dGVzdAB0ZXN0ADEyMzQ=", AUTH, "PLAIN dGVzdAB0ZXN0ADEyMzQ="},
 
 	// Torture cases.
 	{"RCPT TO:<a>", RCPTTO, "a"}, // Minimal address
@@ -92,6 +99,7 @@ var smtpInvalidTests = []struct {
 	// No arguments
 	{"VRFY", VRFY, ""},
 	{"EXPN", EXPN, ""},
+	{"AUTH", AUTH, ""},
 
 	// Extra arguments on commands that don't take them.
 	{"RSET fred", RSET, ""},
@@ -129,3 +137,84 @@ func TestParam(t *testing.T) {
 		t.Fatalf("MAIL FROM w/o params got a parms value of: '%s'", s.params)
 	}
 }
+
+//
+// -------
+// Current tests are crude because Server() API is not exactly settled.
+// We're really testing the sequencing logic, both for accepting a good
+// transaction and rejecting out of sequence things.
+//
+// TODO
+// Testing literal text output is a losing approach. What we should do
+// is mostly test that the response codes are what we expect. Possibly
+// we should connect an instance of the Go SMTP client to the server and
+// verify that that works and sees the right EHLO things, once we support
+// EHLO things that is.
+//
+
+// returns expected server output \r\n'd, and the actual output.
+// current approach cribbed from the net/smtp tests.
+func runSmtpTest(serverStr, clientStr string) (string, string) {
+	server := strings.Join(strings.Split(serverStr, "\n"), "\r\n")
+	client := strings.Join(strings.Split(clientStr, "\n"), "\r\n")
+
+	var outbuf bytes.Buffer
+	writer := bufio.NewWriter(&outbuf)
+	reader := strings.NewReader(client)
+
+	Server(reader, writer)
+	writer.Flush()
+	return server, outbuf.String()
+}
+func TestBasicSmtpd(t *testing.T) {
+	server, actualout := runSmtpTest(basicServer, basicClient)
+	if actualout != server {
+		t.Fatalf("Got:\n%s\nExpected:\n%s", actualout, server)
+	}
+}
+var basicClient = `EHLO localhost
+MAIL FROM:<a@b.com>
+RCPT TO:<c@d.org>
+DATA
+Subject: A test
+
+Done.
+.
+QUIT
+`
+var basicServer =`220 Hello there
+250 localhost Hello whoever you are
+250 Okay, I'll believe you for now
+250 Okay, I'll believe you for now
+354 Send away
+250 I've put it in a can
+221 Goodbye
+`
+
+func TestSequenceErrors(t *testing.T) {
+	server, actualout := runSmtpTest(sequenceServer, sequenceClient)
+	if actualout != server {
+		t.Fatalf("Got:\n%s\nExpected:\n%s", actualout, server)
+	}
+}
+var sequenceClient = `MAIL FROM:<a@b.com>
+RSET
+MAIL FROM:<a@b.com>
+EHLO localhost
+NOOP
+RCPT TO:<c@d.com>
+MAIL FROM:<a@b.com>
+DATA
+Subject: yadda yadda
+`
+var sequenceServer = `220 Hello there
+503 Out of sequence command
+250 Okay
+503 Out of sequence command
+250 localhost Hello whoever you are
+250 Okay
+503 Out of sequence command
+250 Okay, I'll believe you for now
+503 Out of sequence command
+501 Bad: unrecognized command
+`

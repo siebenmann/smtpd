@@ -1,9 +1,14 @@
 //
 //
+// See http://en.wikipedia.org/wiki/Extended_SMTP#Extensions
+//
 package smtpd
 
 import (
+	"bufio"
 	"fmt"
+	"io"
+	"net/textproto"
 	"strings"
 )
 
@@ -12,7 +17,7 @@ import (
 type Command int
 
 const (
-	NoCmd Command = iota // artificial zero value
+	noCmd Command = iota // artificial zero value
 	BadCmd
 	HELO
 	EHLO
@@ -25,6 +30,8 @@ const (
 	VRFY
 	EXPN
 	HELP
+	AUTH
+	STARTTLS
 )
 
 // The result of parsing a SMTP command line to determine the command,
@@ -68,13 +75,15 @@ var smtpCommand = []struct {
 	{VRFY, "VRFY", mustArg},
 	{EXPN, "EXPN", mustArg},
 	{HELP, "HELP", canArg},
+	{STARTTLS, "STARTTLS", noArg},
+	{AUTH, "AUTH", mustArg},
 	// TODO: do I need any additional SMTP commands?
 }
 
 // Turn a Command int into a string for debugging et al.
 func (v Command) String() string {
 	switch v {
-	case NoCmd:
+	case noCmd:
 		return "<zero Command value>"
 	case BadCmd:
 		return "<bad SMTP command>"
@@ -107,15 +116,6 @@ func ParseCmd(line string) ParsedLine {
 	var res ParsedLine
 	res.cmd = BadCmd
 
-	// All valid SMTP commands are either four characters long or have
-	// a space as the fifth character. We do a fast-path check here for
-	// this.
-	llen := len(line)
-	if llen < 4 || (llen > 4 && line[4] != ' ') {
-		res.err = "bad command"
-		return res
-	}
-
 	// We're going to upper-case this, which may explode on us if this
 	// is UTF-8 or anything that smells like it.
 	if !isall7bit([]byte(line)) {
@@ -144,6 +144,7 @@ func ParseCmd(line string) ParsedLine {
 	// ':'. If we don't, this is not a valid match. Note that we now
 	// work with the original-case line, not the upper-case version.
 	cmd := smtpCommand[found]
+	llen := len(line)
 	clen := len(cmd.text)
 	if !(llen == clen || line[clen] == ' ' || line[clen] == ':') {
 		res.err = "unrecognized command"
@@ -213,4 +214,174 @@ func ParseCmd(line string) ParsedLine {
 		res.params = strings.TrimSpace(line[idx+1 : llen])
 	}
 	return res
+}
+
+//
+// ---
+// Protocol state machine
+
+const (
+	sInitial = 1 << iota
+	sHelo
+	sMail
+	sRcpt
+	sData
+	sDone // sent successful DATA, must RSET from here.
+	sQuit // QUIT received and ack'd, we're exiting.
+	
+	// Synthetic state
+	sAbort
+)
+
+// A command not in the states map is handled in all states (probably to
+// be rejected).
+var states = map[Command] struct {
+	validin, next int
+}{
+	HELO: {sInitial|sHelo, sHelo},
+	EHLO: {sInitial|sHelo, sHelo},
+	MAILFROM: {sHelo, sMail},
+	RCPTTO: {sMail|sRcpt, sRcpt},
+	DATA: {sRcpt, sData},
+}
+
+type convo struct {
+	state   int
+	lr      *io.LimitedReader
+	rdr     *textproto.Reader // this is a wrapped version of lr.
+	writer  io.Writer
+	badcmds int
+}
+
+func (c *convo) reply(format string, elems ...interface{}) {
+	b := []byte(fmt.Sprintf(format, elems...) + "\r\n")
+	// we can ignore the length returned, because Write()'s contract
+	// is that it returns a non-nil err if n < len(b).
+	_, err := c.writer.Write(b)
+	if err != nil {
+		c.state = sAbort
+	}
+}
+
+func (c *convo) readCmd() string {
+	// This is much bigger than the RFC requires.
+	c.lr.N = 2048
+	line, err := c.rdr.ReadLine()
+	// abort not just on errors but if the line length is exhausted.
+	if err != nil || c.lr.N == 0 {
+		c.state = sAbort
+		line = ""
+	}
+	return line
+}
+
+func (c *convo) readData() string {
+	c.lr.N = 128*1024
+	b, err := c.rdr.ReadDotBytes()
+	if err != nil || c.lr.N == 0 {
+		c.state = sAbort
+		b = nil
+	} else {
+		c.state = sDone
+	}
+	return string(b)
+}
+
+func (c *convo) stopme() bool {
+	return c.state == sAbort || c.badcmds > 5 || c.state == sQuit
+}
+
+// TODO: this is a skeleton for testing the logic. Since it doesn't do
+// anything, it needs more work.
+func Server(reader io.Reader, writer io.Writer) {
+	var msg string
+	
+	c := &convo{state:sInitial, writer: writer}
+	// io.LimitReader() returns a Reader, not a LimitedReader, and
+	// we want access to the public lr.N field so we can manipulate
+	// it.
+	c.lr = io.LimitReader(reader, 4096).(*io.LimitedReader)
+	c.rdr = textproto.NewReader(bufio.NewReader(c.lr))
+
+	c.reply("220 Hello there")
+	for {
+		if c.stopme() {
+			break
+		}
+
+		line := c.readCmd()
+		if line == "" {
+			break
+		}
+
+		res := ParseCmd(line)
+		if res.cmd == BadCmd {
+			c.badcmds += 1
+			c.reply("501 Bad: %s", res.err)
+			continue
+		}
+		// Is this command valid in this state at all?
+		t := states[res.cmd]
+		if t.validin != 0 && (t.validin & c.state) == 0 {
+			c.reply("503 Out of sequence command")
+			continue
+		}
+		// Error in command?
+		if len(res.err) > 0 {
+			c.reply("553 Garbled command: %s", res.err)
+			continue
+		}
+
+		// The command is legitimate. Handle it for real.
+
+		// Handle simple commands that are valid in all states.
+		if t.validin == 0 {
+			switch res.cmd {
+			case NOOP:
+				c.reply("250 Okay")
+			case RSET:
+				// It's valid to RSET before EHLO and
+				// doing so can't skip EHLO.
+				if c.state != sInitial {
+					c.state = sHelo
+				}
+				c.reply("250 Okay")
+			case QUIT:
+				c.state = sQuit
+				c.reply("221 Goodbye")
+			case HELP:
+				c.reply("214 No help here")
+			default:
+				c.reply("502 Not supported")
+			}
+			continue
+		}
+
+		// Full state commands
+		// TODO: needs better handling, of course.
+		msg = ""
+		c.state = t.next
+		switch res.cmd {
+		case HELO, EHLO:
+			msg = "250 localhost Hello whoever you are"
+		case DATA:
+			msg = "354 Send away"
+		case MAILFROM, RCPTTO:
+			msg = "250 Okay, I'll believe you for now"
+		}
+		if msg != "" {
+			c.reply(msg)
+		}
+
+		// TODO: better handling of reading data?
+		// This is out of sequence. But reading data really
+		// is a special case...
+		if c.state == sData {
+			data := c.readData()
+			if len(data) > 0 {
+				c.reply("250 I've put it in a can")
+			}
+		}
+	}
+	// Closing is the job of a higher level? TODO.
 }
