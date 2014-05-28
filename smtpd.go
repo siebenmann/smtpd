@@ -226,7 +226,6 @@ const (
 	sMail
 	sRcpt
 	sData
-	sDone // sent successful DATA, must RSET from here.
 	sQuit // QUIT received and ack'd, we're exiting.
 	
 	// Synthetic state
@@ -282,7 +281,9 @@ func (c *convo) readData() string {
 		c.state = sAbort
 		b = nil
 	} else {
-		c.state = sDone
+		// Post-DATA we return to a state where we can start
+		// MAIL FROM again. You don't need to RSET from it.
+		c.state = sHelo
 	}
 	return string(b)
 }
