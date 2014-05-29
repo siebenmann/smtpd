@@ -220,7 +220,10 @@ func ParseCmd(line string) ParsedLine {
 // ---
 // Protocol state machine
 
+// States of the SMTP conversation. These are bits and can be masked
+// together.
 const (
+	sStartup = iota // Must be zero value
 	sInitial = 1 << iota
 	sHelo
 	sMail
@@ -244,15 +247,37 @@ var states = map[Command] struct {
 	DATA: {sRcpt, sData},
 }
 
-type convo struct {
-	state   int
+type Conn struct {
 	lr      *io.LimitedReader
 	rdr     *textproto.Reader // this is a wrapped version of lr.
 	writer  io.Writer
+
+	state   int
 	badcmds int
+	local   string // Local hostname for HELO/EHLO 
+
+	curcmd  Command
+	replied bool
+	nstate  int
 }
 
-func (c *convo) reply(format string, elems ...interface{}) {
+type Event int
+const (
+	_ Event = iota
+	COMMAND
+	GOTDATA
+	DONE
+	ABORT
+)	
+
+// Returned to higher levels on events.
+type EventInfo struct {
+	what  Event
+	cmd   Command
+	arg   string
+}
+
+func (c *Conn) reply(format string, elems ...interface{}) {
 	b := []byte(fmt.Sprintf(format, elems...) + "\r\n")
 	// we can ignore the length returned, because Write()'s contract
 	// is that it returns a non-nil err if n < len(b).
@@ -262,7 +287,7 @@ func (c *convo) reply(format string, elems ...interface{}) {
 	}
 }
 
-func (c *convo) readCmd() string {
+func (c *Conn) readCmd() string {
 	// This is much bigger than the RFC requires.
 	c.lr.N = 2048
 	line, err := c.rdr.ReadLine()
@@ -274,7 +299,7 @@ func (c *convo) readCmd() string {
 	return line
 }
 
-func (c *convo) readData() string {
+func (c *Conn) readData() string {
 	c.lr.N = 128*1024
 	b, err := c.rdr.ReadDotBytes()
 	if err != nil || c.lr.N == 0 {
@@ -288,23 +313,131 @@ func (c *convo) readData() string {
 	return string(b)
 }
 
-func (c *convo) stopme() bool {
+func (c *Conn) stopme() bool {
 	return c.state == sAbort || c.badcmds > 5 || c.state == sQuit
 }
 
-// TODO: this is a skeleton for testing the logic. Since it doesn't do
-// anything, it needs more work.
-func Server(reader io.Reader, writer io.Writer) {
-	var msg string
-	
-	c := &convo{state:sInitial, writer: writer}
-	// io.LimitReader() returns a Reader, not a LimitedReader, and
-	// we want access to the public lr.N field so we can manipulate
-	// it.
-	c.lr = io.LimitReader(reader, 4096).(*io.LimitedReader)
-	c.rdr = textproto.NewReader(bufio.NewReader(c.lr))
+func (c *Conn) Accept() {
+	if c.replied {
+		return
+	}
+	oldstate := c.state
+	c.state = c.nstate
+	switch c.curcmd {
+	case HELO:
+		c.reply("250 %s Hello whoever you are", c.local)
+	case EHLO:
+		c.reply("250-%s Hello whoever you are\r\n250-PIPELINING\r\n250 HELP", c.local)
+	case MAILFROM, RCPTTO:
+		c.reply("250 Okay, I'll believe you for now")
+	case DATA:
+		// c.curcmd == DATA both when we've received the
+		// initial DATA and when we've actually received the
+		// data-block. We tell them apart based on the old
+		// state, which is sRcpt or sData respectively.
+		if oldstate == sRcpt {
+			c.reply("354 Send away")
+		} else {
+			c.reply("250 I've put it in a can")
+		}
+	}
+	c.replied = true
+}
 
-	c.reply("220 Hello there")
+// Accept a DATA blob with an ID that is reported to the client.
+// Only does anything when we need to reply to a DATA blob.
+func (c *Conn) AcceptData(id string) {
+	if c.replied || c.curcmd != DATA || c.state != sData {
+		return
+	}
+	c.state = c.nstate
+	c.reply("250 I've put it in a can called %s", id)
+	c.replied = true
+}
+
+func (c *Conn) Reject() {
+	switch c.curcmd {
+	case HELO, EHLO:
+		c.reply("550 Not accepted")
+	case MAILFROM, RCPTTO:
+		c.reply("550 Bad address")
+	case DATA:
+		c.reply("554 Not accepted")
+	}
+	c.replied = true
+}
+func (c *Conn) Tempfail() {
+	switch c.curcmd {
+	case HELO, EHLO:
+		c.reply("421 Not available now")
+	case MAILFROM, RCPTTO, DATA:
+		c.reply("450 Not available")
+	}
+	c.replied = true
+}
+
+// Basic syntax checks on the address. We could do more to verify that
+// the domain looks sensible but ehh, this is good enough for now.
+// Basically we want things that look like 'a@b.c': must have an @,
+// must not end with various bad characters, must have a '.' after
+// the @.
+func addr_valid(a string) bool {
+	// caller must reject null address if appropriate.
+	if a == "" {
+		return true
+	}
+	lp := len(a)-1
+	if a[lp] == '"' || a[lp] == ']' || a[lp] == '.' {
+		return false
+	}
+	idx := strings.IndexByte(a, '@')
+	if idx == -1 || idx == lp {
+		return false
+	}
+	id2 := strings.IndexByte(a[idx+1:], '.')
+	if id2 == -1 {
+		return false
+	}
+	return true
+}
+
+// Return the next event from the SMTP connection. For commands (and for
+// GOTDATA) the caller may call Reject() or Tempfail() to reject or tempfail
+// the command. Calling Accept() is optional; Next() will do it for you
+// implicitly.
+// Only HELO/EHLO, MAIL FROM, RCPT TO, DATA, and the actual message are
+// returned. Next() guarantees that the protocol ordering requirements
+// are met, so the called must reset all accumulated data when it sees
+// a MAIL FROM or HELO/EHLO.
+func (c *Conn) Next() EventInfo {
+	var evt EventInfo
+
+	if !c.replied && c.curcmd != noCmd {
+		c.Accept()
+	}
+	if c.state == sStartup {
+		c.state = sInitial
+		c.reply("220 Hello there")
+	}
+
+	// Read DATA chunk if called for.
+	if c.state == sData {
+		data := c.readData()
+		if len(data) > 0 {
+			evt.what = GOTDATA
+			evt.arg = data
+			c.replied = false
+			// This is technically correct; only a *successful*
+			// DATA block ends the mail transaction according to
+			// the RFCs. An unsuccessful one must be RSET.
+			c.nstate = sHelo
+			return evt
+		}
+		// If the data read failed, c.state will be sAbort and we
+		// will exit in the main loop.
+	}
+
+	// Main command loop.
 	for {
 		if c.stopme() {
 			break
@@ -347,9 +480,12 @@ func Server(reader io.Reader, writer io.Writer) {
 					c.state = sHelo
 				}
 				c.reply("250 Okay")
+				// RSETs are not delivered to higher levels;
+				// they are implicit in sudden MAIL FROMs.
 			case QUIT:
 				c.state = sQuit
 				c.reply("221 Goodbye")
+				// Will exit at main loop.
 			case HELP:
 				c.reply("214 No help here")
 			default:
@@ -359,30 +495,46 @@ func Server(reader io.Reader, writer io.Writer) {
 		}
 
 		// Full state commands
-		// TODO: needs better handling, of course.
-		msg = ""
-		c.state = t.next
+		c.nstate = t.next
+		c.replied = false
+		c.curcmd = res.cmd
+		// Do initial checks on commands.
 		switch res.cmd {
-		case HELO, EHLO:
-			msg = "250 localhost Hello whoever you are"
-		case DATA:
-			msg = "354 Send away"
-		case MAILFROM, RCPTTO:
-			msg = "250 Okay, I'll believe you for now"
-		}
-		if msg != "" {
-			c.reply(msg)
-		}
-
-		// TODO: better handling of reading data?
-		// This is out of sequence. But reading data really
-		// is a special case...
-		if c.state == sData {
-			data := c.readData()
-			if len(data) > 0 {
-				c.reply("250 I've put it in a can")
+		case MAILFROM:
+			if !addr_valid(res.arg) {
+				c.Reject()
+				continue
+			}
+		case RCPTTO:
+			if len(res.arg) == 0 || !addr_valid(res.arg) {
+				c.Reject()
+				continue
 			}
 		}
+
+		// Real, valid, in sequence command. Deliver it to our
+		// caller.
+		evt.what = COMMAND
+		evt.cmd = res.cmd
+		// TODO: does this hold down more memory than necessary?
+		evt.arg = res.arg
+		return evt
 	}
-	// Closing is the job of a higher level? TODO.
+
+	if c.state == sQuit {
+		evt.what = DONE
+	} else {
+		evt.what = ABORT
+	}
+	return evt
+}
+
+func NewConn(reader io.Reader, writer io.Writer, localname string) *Conn {
+	c := &Conn{state:sStartup, writer: writer, local: localname}
+	// io.LimitReader() returns a Reader, not a LimitedReader, and
+	// we want access to the public lr.N field so we can manipulate
+	// it.
+	c.lr = io.LimitReader(reader, 4096).(*io.LimitedReader)
+	c.rdr = textproto.NewReader(bufio.NewReader(c.lr))
+	return c
 }

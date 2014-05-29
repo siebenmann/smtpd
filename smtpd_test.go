@@ -162,7 +162,16 @@ func runSmtpTest(serverStr, clientStr string) (string, string) {
 	writer := bufio.NewWriter(&outbuf)
 	reader := strings.NewReader(client)
 
-	Server(reader, writer)
+	// Server(reader, writer)
+	var evt EventInfo
+	conn := NewConn(reader, writer, "localhost")
+	for {
+		evt = conn.Next()
+		if evt.what == DONE || evt.what == ABORT {
+			break
+		}
+	}
+	
 	writer.Flush()
 	return server, outbuf.String()
 }
@@ -193,7 +202,9 @@ RCPT TO:<e@f.com>
 QUIT
 `
 var basicServer =`220 Hello there
-250 localhost Hello whoever you are
+250-localhost Hello whoever you are
+250-PIPELINING
+250 HELP
 250 Okay, I'll believe you for now
 250 Okay, I'll believe you for now
 354 Send away
@@ -224,15 +235,87 @@ RCPT TO:<c@d.com>
 MAIL FROM:<a@b.com>
 DATA
 Subject: yadda yadda
+RSET
+MAIL FROM:<abc>
+MAIL FROM:<abc@def">
+MAIL FROM:<abc@def]>
+MAIL FROM:<abc@def>
+MAIL FROM:<abc@def.ghi>
+RCPT TO:<>
+RCPT TO:<abc@def>
 `
 var sequenceServer = `220 Hello there
 503 Out of sequence command
 250 Okay
 503 Out of sequence command
-250 localhost Hello whoever you are
+250-localhost Hello whoever you are
+250-PIPELINING
+250 HELP
 250 Okay
 503 Out of sequence command
 250 Okay, I'll believe you for now
 503 Out of sequence command
 501 Bad: unrecognized command
+250 Okay
+550 Bad address
+550 Bad address
+550 Bad address
+550 Bad address
+250 Okay, I'll believe you for now
+550 Bad address
+550 Bad address
 `
+
+// Test the stream of events emitted from Next(), as opposed to the output
+// that the server produces.
+var testStream = []struct {
+	what Event
+	cmd  Command
+}{
+	{COMMAND,EHLO}, {COMMAND,MAILFROM}, {COMMAND,RCPTTO},
+	{COMMAND,RCPTTO}, {COMMAND,DATA}, {GOTDATA,noCmd},
+	{COMMAND,MAILFROM}, {COMMAND,MAILFROM}, {DONE,noCmd},
+}
+var testClient = `EHLO fred
+NOOP
+RSET
+RCPT TO:<barney@jim>
+MAIL FROM:<fred@fred>
+MAIL FROM:<fred@fred.com>
+RCPT TO:<>
+RCPT TO:<joe@joe.com>
+RCPT TO:<jane@jane.org>
+DATA
+Subject: A test.
+
+.
+RSET
+MAIL FROM:<joe@joe.com>
+RSET
+MAIL FROM:<joe@joe.com>
+QUIT
+`
+func TestSequence(t *testing.T) {
+	client := strings.Join(strings.Split(testClient, "\n"), "\r\n")
+
+	var outbuf bytes.Buffer
+	writer := bufio.NewWriter(&outbuf)
+	reader := strings.NewReader(client)
+
+	// Server(reader, writer)
+	var evt EventInfo
+	conn := NewConn(reader, writer, "localhost")
+	pos := 0
+	for {
+		evt = conn.Next()
+		ts := testStream[pos]
+		if evt.what != ts.what || evt.cmd != ts.cmd {
+			t.Fatalf("Sequence mismatch at step %d: expected %v %v got %v %v\n",
+				pos, ts.what, ts.cmd, evt.what, evt.cmd)
+		}
+		pos += 1
+		if evt.what == DONE {
+			break
+		}
+	}
+}
