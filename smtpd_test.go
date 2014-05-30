@@ -6,8 +6,11 @@ package smtpd
 import (
 	"bufio"
 	"bytes"
+	"io"
+	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 // This should contain only things that are actually valid. Do not test
@@ -152,6 +155,21 @@ func TestParam(t *testing.T) {
 // EHLO things that is.
 //
 
+// faker implements the net.Conn() interface.
+type faker struct {
+	io.ReadWriter
+}
+
+func (f faker) Close() error                     { return nil }
+func (f faker) LocalAddr() net.Addr              { return nil }
+func (f faker) SetDeadline(time.Time) error      { return nil }
+func (f faker) SetReadDeadline(time.Time) error  { return nil }
+func (f faker) SetWriteDeadline(time.Time) error { return nil }
+func (f faker) RemoteAddr() net.Addr {
+	a, _ := net.ResolveTCPAddr("tcp", "127.10.10.100:56789")
+	return a
+}
+
 // returns expected server output \r\n'd, and the actual output.
 // current approach cribbed from the net/smtp tests.
 func runSmtpTest(serverStr, clientStr string) (string, string) {
@@ -160,18 +178,19 @@ func runSmtpTest(serverStr, clientStr string) (string, string) {
 
 	var outbuf bytes.Buffer
 	writer := bufio.NewWriter(&outbuf)
-	reader := strings.NewReader(client)
+	reader := bufio.NewReader(strings.NewReader(client))
+	cxn := &faker{ReadWriter: bufio.NewReadWriter(reader, writer)}
 
 	// Server(reader, writer)
 	var evt EventInfo
-	conn := NewConn(reader, writer, "localhost")
+	conn := NewConn(cxn, "localhost", nil)
 	for {
 		evt = conn.Next()
-		if evt.what == DONE || evt.what == ABORT {
+		if evt.What == DONE || evt.What == ABORT {
 			break
 		}
 	}
-	
+
 	writer.Flush()
 	return server, outbuf.String()
 }
@@ -181,6 +200,7 @@ func TestBasicSmtpd(t *testing.T) {
 		t.Fatalf("Got:\n%s\nExpected:\n%s", actualout, server)
 	}
 }
+
 // EHLO, send email, send email again, try what should be an out of
 // sequence RCPT TO.
 var basicClient = `EHLO localhost
@@ -201,8 +221,8 @@ Done. 2.
 RCPT TO:<e@f.com>
 QUIT
 `
-var basicServer =`220 Hello there
-250-localhost Hello whoever you are
+var basicServer = `220 localhost go-smtpd
+250-localhost Hello 127.10.10.100:56789
 250-PIPELINING
 250 HELP
 250 Okay, I'll believe you for now
@@ -223,6 +243,7 @@ func TestSequenceErrors(t *testing.T) {
 		t.Fatalf("Got:\n%s\nExpected:\n%s", actualout, server)
 	}
 }
+
 // A whole series of out of sequence commands, and finally an unrecognized
 // one. We try a RSET to validate that it doesn't allow us to MAIL FROM
 // without an EHLO.
@@ -244,11 +265,11 @@ MAIL FROM:<abc@def.ghi>
 RCPT TO:<>
 RCPT TO:<abc@def>
 `
-var sequenceServer = `220 Hello there
+var sequenceServer = `220 localhost go-smtpd
 503 Out of sequence command
 250 Okay
 503 Out of sequence command
-250-localhost Hello whoever you are
+250-localhost Hello 127.10.10.100:56789
 250-PIPELINING
 250 HELP
 250 Okay
@@ -272,9 +293,9 @@ var testStream = []struct {
 	what Event
 	cmd  Command
 }{
-	{COMMAND,EHLO}, {COMMAND,MAILFROM}, {COMMAND,RCPTTO},
-	{COMMAND,RCPTTO}, {COMMAND,DATA}, {GOTDATA,noCmd},
-	{COMMAND,MAILFROM}, {COMMAND,MAILFROM}, {DONE,noCmd},
+	{COMMAND, EHLO}, {COMMAND, MAILFROM}, {COMMAND, RCPTTO},
+	{COMMAND, RCPTTO}, {COMMAND, DATA}, {GOTDATA, noCmd},
+	{COMMAND, MAILFROM}, {COMMAND, MAILFROM}, {DONE, noCmd},
 }
 var testClient = `EHLO fred
 NOOP
@@ -295,26 +316,28 @@ RSET
 MAIL FROM:<joe@joe.com>
 QUIT
 `
+
 func TestSequence(t *testing.T) {
 	client := strings.Join(strings.Split(testClient, "\n"), "\r\n")
 
 	var outbuf bytes.Buffer
 	writer := bufio.NewWriter(&outbuf)
-	reader := strings.NewReader(client)
+	reader := bufio.NewReader(strings.NewReader(client))
+	cxn := &faker{ReadWriter: bufio.NewReadWriter(reader, writer)}
 
 	// Server(reader, writer)
 	var evt EventInfo
-	conn := NewConn(reader, writer, "localhost")
+	conn := NewConn(cxn, "localhost", nil)
 	pos := 0
 	for {
 		evt = conn.Next()
 		ts := testStream[pos]
-		if evt.what != ts.what || evt.cmd != ts.cmd {
+		if evt.What != ts.what || evt.Cmd != ts.cmd {
 			t.Fatalf("Sequence mismatch at step %d: expected %v %v got %v %v\n",
-				pos, ts.what, ts.cmd, evt.what, evt.cmd)
+				pos, ts.what, ts.cmd, evt.What, evt.Cmd)
 		}
 		pos += 1
-		if evt.what == DONE {
+		if evt.What == DONE {
 			break
 		}
 	}

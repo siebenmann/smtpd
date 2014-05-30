@@ -8,9 +8,13 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"net"
 	"net/textproto"
 	"strings"
+	"time"
 )
+
+const TimeFmt = "2006-01-02 15:04:05 -0700"
 
 // An enumeration of SMTP commands that we recognize, plus BadCmd for
 // 'no such command'.
@@ -230,31 +234,33 @@ const (
 	sRcpt
 	sData
 	sQuit // QUIT received and ack'd, we're exiting.
-	
+
 	// Synthetic state
+	sPostData
 	sAbort
 )
 
 // A command not in the states map is handled in all states (probably to
 // be rejected).
-var states = map[Command] struct {
+var states = map[Command]struct {
 	validin, next int
 }{
-	HELO: {sInitial|sHelo, sHelo},
-	EHLO: {sInitial|sHelo, sHelo},
+	HELO:     {sInitial | sHelo, sHelo},
+	EHLO:     {sInitial | sHelo, sHelo},
 	MAILFROM: {sHelo, sMail},
-	RCPTTO: {sMail|sRcpt, sRcpt},
-	DATA: {sRcpt, sData},
+	RCPTTO:   {sMail | sRcpt, sRcpt},
+	DATA:     {sRcpt, sData},
 }
 
 type Conn struct {
-	lr      *io.LimitedReader
-	rdr     *textproto.Reader // this is a wrapped version of lr.
-	writer  io.Writer
+	conn   net.Conn
+	lr     *io.LimitedReader
+	rdr    *textproto.Reader // this is a wrapped version of lr.
+	logger io.Writer
 
 	state   int
 	badcmds int
-	local   string // Local hostname for HELO/EHLO 
+	local   string // Local hostname for HELO/EHLO
 
 	curcmd  Command
 	replied bool
@@ -262,27 +268,41 @@ type Conn struct {
 }
 
 type Event int
+
 const (
 	_ Event = iota
 	COMMAND
 	GOTDATA
 	DONE
 	ABORT
-)	
+)
 
 // Returned to higher levels on events.
 type EventInfo struct {
-	what  Event
-	cmd   Command
-	arg   string
+	What Event
+	Cmd  Command
+	Arg  string
+}
+
+func (c *Conn) log(dir string, format string, elems ...interface{}) {
+	if c.logger == nil {
+		return
+	}
+	msg := fmt.Sprintf(format, elems...)
+	c.logger.Write([]byte(fmt.Sprintf("%s %s\n", dir, msg)))
 }
 
 func (c *Conn) reply(format string, elems ...interface{}) {
-	b := []byte(fmt.Sprintf(format, elems...) + "\r\n")
+	s := fmt.Sprintf(format, elems...)
+	c.log("w", s)
+	b := []byte(s + "\r\n")
 	// we can ignore the length returned, because Write()'s contract
 	// is that it returns a non-nil err if n < len(b).
-	_, err := c.writer.Write(b)
+	// We don't set a write deadline for reasons beyond the scope of
+	// this comment.
+	_, err := c.conn.Write(b)
 	if err != nil {
+		c.log("!", "reply abort: %v", err)
 		c.state = sAbort
 	}
 }
@@ -290,25 +310,32 @@ func (c *Conn) reply(format string, elems ...interface{}) {
 func (c *Conn) readCmd() string {
 	// This is much bigger than the RFC requires.
 	c.lr.N = 2048
+	// Allow two minutes per command.
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Minute))
 	line, err := c.rdr.ReadLine()
 	// abort not just on errors but if the line length is exhausted.
 	if err != nil || c.lr.N == 0 {
 		c.state = sAbort
 		line = ""
+		c.log("!", "command abort %d bytes left err: %v", c.lr.N, err)
+	} else {
+		c.log("r", line)
 	}
 	return line
 }
 
 func (c *Conn) readData() string {
-	c.lr.N = 128*1024
+	c.conn.SetReadDeadline(time.Now().Add(10 * time.Minute))
+	// TODO: better sizing. 5 Mbytes is relatively absurd, honestly.
+	// (but 128Kb caused one abort already)
+	c.lr.N = 5 * 1024 * 1024
 	b, err := c.rdr.ReadDotBytes()
 	if err != nil || c.lr.N == 0 {
 		c.state = sAbort
 		b = nil
+		c.log("!", "DATA abort %d bytes left err: %v", c.lr.N, err)
 	} else {
-		// Post-DATA we return to a state where we can start
-		// MAIL FROM again. You don't need to RSET from it.
-		c.state = sHelo
+		c.log("r", ". <end of data>")
 	}
 	return string(b)
 }
@@ -325,16 +352,18 @@ func (c *Conn) Accept() {
 	c.state = c.nstate
 	switch c.curcmd {
 	case HELO:
-		c.reply("250 %s Hello whoever you are", c.local)
+		c.reply("250 %s Hello %v", c.local, c.conn.RemoteAddr())
 	case EHLO:
-		c.reply("250-%s Hello whoever you are\r\n250-PIPELINING\r\n250 HELP", c.local)
+		c.reply("250-%s Hello %v", c.local, c.conn.RemoteAddr())
+		c.reply("250-PIPELINING")
+		c.reply("250 HELP")
 	case MAILFROM, RCPTTO:
 		c.reply("250 Okay, I'll believe you for now")
 	case DATA:
 		// c.curcmd == DATA both when we've received the
 		// initial DATA and when we've actually received the
 		// data-block. We tell them apart based on the old
-		// state, which is sRcpt or sData respectively.
+		// state, which is sRcpt or sPostData respectively.
 		if oldstate == sRcpt {
 			c.reply("354 Send away")
 		} else {
@@ -347,7 +376,7 @@ func (c *Conn) Accept() {
 // Accept a DATA blob with an ID that is reported to the client.
 // Only does anything when we need to reply to a DATA blob.
 func (c *Conn) AcceptData(id string) {
-	if c.replied || c.curcmd != DATA || c.state != sData {
+	if c.replied || c.curcmd != DATA || c.state != sPostData {
 		return
 	}
 	c.state = c.nstate
@@ -386,7 +415,7 @@ func addr_valid(a string) bool {
 	if a == "" {
 		return true
 	}
-	lp := len(a)-1
+	lp := len(a) - 1
 	if a[lp] == '"' || a[lp] == ']' || a[lp] == '.' {
 		return false
 	}
@@ -409,6 +438,8 @@ func addr_valid(a string) bool {
 // returned. Next() guarantees that the protocol ordering requirements
 // are met, so the called must reset all accumulated data when it sees
 // a MAIL FROM or HELO/EHLO.
+// It is invalid to call Next() after it has returned a DONE or ABORT
+// event.
 func (c *Conn) Next() EventInfo {
 	var evt EventInfo
 
@@ -417,19 +448,23 @@ func (c *Conn) Next() EventInfo {
 	}
 	if c.state == sStartup {
 		c.state = sInitial
-		c.reply("220 Hello there")
+		// log preceeds the banner in case the banner hits an error.
+		c.log("#", "remote %v at %s", c.conn.RemoteAddr(),
+			time.Now().Format(TimeFmt))
+		c.reply("220 %s go-smtpd", c.local)
 	}
 
 	// Read DATA chunk if called for.
 	if c.state == sData {
 		data := c.readData()
 		if len(data) > 0 {
-			evt.what = GOTDATA
-			evt.arg = data
+			evt.What = GOTDATA
+			evt.Arg = data
 			c.replied = false
 			// This is technically correct; only a *successful*
 			// DATA block ends the mail transaction according to
 			// the RFCs. An unsuccessful one must be RSET.
+			c.state = sPostData
 			c.nstate = sHelo
 			return evt
 		}
@@ -456,7 +491,7 @@ func (c *Conn) Next() EventInfo {
 		}
 		// Is this command valid in this state at all?
 		t := states[res.cmd]
-		if t.validin != 0 && (t.validin & c.state) == 0 {
+		if t.validin != 0 && (t.validin&c.state) == 0 {
 			c.reply("503 Out of sequence command")
 			continue
 		}
@@ -514,27 +549,33 @@ func (c *Conn) Next() EventInfo {
 
 		// Real, valid, in sequence command. Deliver it to our
 		// caller.
-		evt.what = COMMAND
-		evt.cmd = res.cmd
+		evt.What = COMMAND
+		evt.Cmd = res.cmd
 		// TODO: does this hold down more memory than necessary?
-		evt.arg = res.arg
+		evt.Arg = res.arg
 		return evt
 	}
 
 	if c.state == sQuit {
-		evt.what = DONE
+		evt.What = DONE
+		c.log("#", "finished at %v", time.Now().Format(TimeFmt))
 	} else {
-		evt.what = ABORT
+		evt.What = ABORT
+		c.log("#", "abort at %v", time.Now().Format(TimeFmt))
 	}
 	return evt
 }
 
-func NewConn(reader io.Reader, writer io.Writer, localname string) *Conn {
-	c := &Conn{state:sStartup, writer: writer, local: localname}
+// Create a new SMTP conversation from conn, the network connection.
+// servername is the server name displayed in the greeting banner.
+// If non-nil log will receive a trace of SMTP commands and responses
+// (but not email messages themselves).
+func NewConn(conn net.Conn, servername string, log io.Writer) *Conn {
+	c := &Conn{state: sStartup, conn: conn, local: servername, logger: log}
 	// io.LimitReader() returns a Reader, not a LimitedReader, and
 	// we want access to the public lr.N field so we can manipulate
 	// it.
-	c.lr = io.LimitReader(reader, 4096).(*io.LimitedReader)
+	c.lr = io.LimitReader(conn, 4096).(*io.LimitedReader)
 	c.rdr = textproto.NewReader(bufio.NewReader(c.lr))
 	return c
 }
