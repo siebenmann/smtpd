@@ -6,6 +6,7 @@ package smtpd
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -258,6 +259,12 @@ type Conn struct {
 	rdr    *textproto.Reader // this is a wrapped version of lr.
 	logger io.Writer
 
+	tlsc      *tls.Config
+	TLSOn     bool
+	TLSCipher uint16
+
+	delay time.Duration
+
 	state   int
 	badcmds int
 	local   string // Local hostname for HELO/EHLO
@@ -292,15 +299,36 @@ func (c *Conn) log(dir string, format string, elems ...interface{}) {
 	c.logger.Write([]byte(fmt.Sprintf("%s %s\n", dir, msg)))
 }
 
+// This assumes we're working with a non-Nagle connection. It may not work
+// great with TLS, but at least it's at the right level.
+func (c *Conn) slowWrite(b []byte) (n int, err error) {
+	var x, cnt int
+	for i, _ := range b {
+		x, err = c.conn.Write(b[i : i+1])
+		cnt += x
+		if err != nil {
+			break
+		}
+		time.Sleep(c.delay)
+	}
+	return cnt, err
+}
+
 func (c *Conn) reply(format string, elems ...interface{}) {
+	var err error
 	s := fmt.Sprintf(format, elems...)
 	c.log("w", s)
 	b := []byte(s + "\r\n")
 	// we can ignore the length returned, because Write()'s contract
 	// is that it returns a non-nil err if n < len(b).
-	// We don't set a write deadline for reasons beyond the scope of
-	// this comment.
-	_, err := c.conn.Write(b)
+	// We are cautious about our write deadline.
+	wd := c.delay * time.Duration(len(b))
+	c.conn.SetWriteDeadline(time.Now().Add(2*time.Minute + wd))
+	if c.delay > 0 {
+		_, err = c.slowWrite(b)
+	} else {
+		_, err = c.conn.Write(b)
+	}
 	if err != nil {
 		c.log("!", "reply abort: %v", err)
 		c.state = sAbort
@@ -344,6 +372,16 @@ func (c *Conn) stopme() bool {
 	return c.state == sAbort || c.badcmds > 5 || c.state == sQuit
 }
 
+// TLS must be added before Next() is called for the first time.
+func (c *Conn) AddTLS(tlsc *tls.Config) {
+	c.TLSOn = false
+	c.tlsc = tlsc
+}
+
+func (c *Conn) AddDelay(delay time.Duration) {
+	c.delay = delay
+}
+
 func (c *Conn) Accept() {
 	if c.replied {
 		return
@@ -356,6 +394,11 @@ func (c *Conn) Accept() {
 	case EHLO:
 		c.reply("250-%s Hello %v", c.local, c.conn.RemoteAddr())
 		c.reply("250-PIPELINING")
+		// STARTTLS RFC says: MUST NOT advertise STARTTLS
+		// after TLS is on.
+		if c.tlsc != nil && !c.TLSOn {
+			c.reply("250-STARTTLS")
+		}
 		c.reply("250 HELP")
 	case MAILFROM, RCPTTO:
 		c.reply("250 Okay, I'll believe you for now")
@@ -523,6 +566,31 @@ func (c *Conn) Next() EventInfo {
 				// Will exit at main loop.
 			case HELP:
 				c.reply("214 No help here")
+			case STARTTLS:
+				if c.tlsc == nil || c.TLSOn {
+					c.reply("502 Not supported")
+					continue
+				}
+				c.reply("220 Ready to start TLS")
+				if c.state == sAbort {
+					continue
+				}
+				tlsConn := tls.Server(c.conn, c.tlsc)
+				err := tlsConn.Handshake()
+				if err != nil {
+					c.log("!", "TLS setup failed: %v", err)
+					c.state = sAbort
+					continue
+				}
+				c.setupConn(tlsConn)
+				c.TLSOn = true
+				cs := tlsConn.ConnectionState()
+				c.log("!", "TLS negociated with cipher 0x%04x", cs.CipherSuite)
+				c.TLSCipher = cs.CipherSuite
+				// By the STARTTLS RFC, we return to our state
+				// immediately after the greeting banner
+				// and clients must re-EHLO.
+				c.state = sInitial
 			default:
 				c.reply("502 Not supported")
 			}
@@ -566,16 +634,22 @@ func (c *Conn) Next() EventInfo {
 	return evt
 }
 
-// Create a new SMTP conversation from conn, the network connection.
-// servername is the server name displayed in the greeting banner.
-// If non-nil log will receive a trace of SMTP commands and responses
-// (but not email messages themselves).
-func NewConn(conn net.Conn, servername string, log io.Writer) *Conn {
-	c := &Conn{state: sStartup, conn: conn, local: servername, logger: log}
+// We need this for re-setting up the connection on TLS start.
+func (c *Conn) setupConn(conn net.Conn) {
+	c.conn = conn
 	// io.LimitReader() returns a Reader, not a LimitedReader, and
 	// we want access to the public lr.N field so we can manipulate
 	// it.
 	c.lr = io.LimitReader(conn, 4096).(*io.LimitedReader)
 	c.rdr = textproto.NewReader(bufio.NewReader(c.lr))
+}
+
+// Create a new SMTP conversation from conn, the network connection.
+// servername is the server name displayed in the greeting banner.
+// If non-nil log will receive a trace of SMTP commands and responses
+// (but not email messages themselves).
+func NewConn(conn net.Conn, servername string, log io.Writer) *Conn {
+	c := &Conn{state: sStartup, local: servername, logger: log}
+	c.setupConn(conn)
 	return c
 }

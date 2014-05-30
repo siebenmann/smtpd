@@ -12,6 +12,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha1"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
@@ -56,26 +57,6 @@ func (log *smtpLogger) Write(b []byte) (n int, err error) {
 	return n, err
 }
 
-// a net.Conn that writes output at one byte every tenth of a second.
-// this assumes we're in the normal no-Nagle state.
-type slowNet struct {
-	net.Conn
-}
-
-func (c *slowNet) Write(b []byte) (n int, err error) {
-	var x, cnt int
-	delay := time.Second / 10
-	for i, _ := range b {
-		x, err = c.Conn.Write(b[i : i+1])
-		cnt += x
-		if err != nil {
-			break
-		}
-		time.Sleep(delay)
-	}
-	return cnt, err
-}
-
 type smtpTransaction struct {
 	raddr, laddr net.Addr
 	heloname     string
@@ -85,6 +66,9 @@ type smtpTransaction struct {
 	data string
 	hash string    // canonical hash of the data, currently SHA1
 	when time.Time // when the DATA was received.
+
+	tlson  bool
+	cipher uint16
 }
 
 func msgDetails(prefix string, trans *smtpTransaction, embedbody bool) []byte {
@@ -93,6 +77,9 @@ func msgDetails(prefix string, trans *smtpTransaction, embedbody bool) []byte {
 	fmt.Fprintf(writer, "id %s %s\n", prefix, trans.when.Format(TimeNZ))
 	fmt.Fprintf(writer, "remote %v to %v with helo '%s'\n", trans.raddr,
 		trans.laddr, trans.heloname)
+	if trans.tlson {
+		fmt.Fprintf(writer, "tls on cipher 0x%04x\n", trans.cipher)
+	}
 	fmt.Fprintf(writer, "from <%s>\n", trans.from)
 	for _, a := range trans.rcptto {
 		fmt.Fprintf(writer, "to <%s>\n", a)
@@ -118,8 +105,12 @@ func logMessage(prefix string, trans *smtpTransaction, logf io.Writer) {
 	for _, a := range trans.rcptto {
 		fmt.Fprintf(writer, " <%s>", a)
 	}
-	fmt.Fprintf(writer, ": message %d bytes hash %s | local %v helo '%s' \n",
+	fmt.Fprintf(writer, ": message %d bytes hash %s | local %v helo '%s'",
 		len(trans.data), trans.hash, trans.laddr, trans.heloname)
+	if trans.tlson {
+		fmt.Fprintf(writer, " tls:cipher 0x%04x", trans.cipher)
+	}
+	fmt.Fprintf(writer, "\n")
 	writer.Flush()
 	logf.Write(outbuf.Bytes())
 }
@@ -156,7 +147,7 @@ func handleMessage(prefix string, trans *smtpTransaction, logf io.Writer) (strin
 	return hash, err
 }
 
-func process(cid int, nc net.Conn, logf io.Writer, smtplog io.Writer) {
+func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.Writer) {
 	var evt smtpd.EventInfo
 	var convo *smtpd.Conn
 	var l2 io.Writer
@@ -177,11 +168,13 @@ func process(cid int, nc net.Conn, logf io.Writer, smtplog io.Writer) {
 	if srvname != "" {
 		sname = srvname
 	}
+	convo = smtpd.NewConn(nc, sname, l2)
 	if goslow {
-		f := &slowNet{Conn: nc}
-		convo = smtpd.NewConn(f, sname, l2)
-	} else {
-		convo = smtpd.NewConn(nc, sname, l2)
+		convo.AddDelay(time.Second / 10)
+	}
+	if len(tlsc.Certificates) > 0 {
+		tlsc.ServerName = sname
+		convo.AddTLS(&tlsc)
 	}
 
 	// Main transaction loop. We gather up email messages as they come
@@ -223,12 +216,10 @@ func process(cid int, nc net.Conn, logf io.Writer, smtplog io.Writer) {
 		case smtpd.GOTDATA:
 			// message rejection is deferred until after logging
 			// et al.
-			// if failgotdata {
-			//	convo.Reject()
-			//	continue
-			// }
 			trans.data = evt.Arg
 			trans.when = time.Now()
+			trans.tlson = convo.TLSOn
+			trans.cipher = convo.TLSCipher
 			h := sha1.New()
 			h.Write([]byte(trans.data))
 			trans.hash = fmt.Sprintf("%x", h.Sum(nil))
@@ -273,7 +264,9 @@ func openlogfile(fname string) (outf io.Writer, err error) {
 
 func main() {
 	var smtplogfile, logfile string
+	var certfile, keyfile string
 	var force bool
+	var tlsConfig tls.Config
 
 	flag.BoolVar(&failhelo, "H", false, "reject all HELO/EHLOs")
 	flag.BoolVar(&failmail, "F", false, "reject all MAIL FROMs")
@@ -287,6 +280,8 @@ func main() {
 	flag.StringVar(&savedir, "d", "", "directory to save received messages in")
 	flag.BoolVar(&force, "force-receive", false, "force accepting email even without a savedir")
 	flag.BoolVar(&msghash, "hash-msg-only", false, "save files under the hash of the message only, not of their full information")
+	flag.StringVar(&certfile, "c", "", "TLS PEM certificate file")
+	flag.StringVar(&keyfile, "k", "", "TLS PEM key file")
 
 	flag.Parse()
 	if flag.NArg() != 1 {
@@ -295,6 +290,25 @@ func main() {
 	}
 	if savedir == "" && !(force || failhelo || failmail || failrcpt || faildata || failgotdata) {
 		warnf("I refuse to accept email without either a -d savedir or --force-receive\n")
+		return
+	}
+
+	switch {
+	case certfile != "" && keyfile != "":
+		cert, err := tls.LoadX509KeyPair(certfile, keyfile)
+		if err != nil {
+			warnf("error loading TLS cert from %s & %s: %v\n", certfile, keyfile, err)
+			return
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
+		tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
+		tlsConfig.SessionTicketsDisabled = true
+
+	case certfile != "":
+		warnf("certfile specified without keyfile")
+		return
+	case keyfile != "":
+		warnf("keyfile specified without certfile")
 		return
 	}
 
@@ -330,7 +344,7 @@ func main() {
 	for {
 		nc, err := conn.Accept()
 		if err == nil {
-			go process(cid, nc, logf, slogf)
+			go process(cid, nc, tlsConfig, logf, slogf)
 		}
 		cid += 1
 	}
