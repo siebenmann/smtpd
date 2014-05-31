@@ -226,7 +226,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 			transid, err := handleMessage(prefix, trans, logf)
 			if err == nil {
 				if failgotdata {
-					convo.Reject()
+					convo.RejectData(transid)
 				} else {
 					convo.AcceptData(transid)
 				}

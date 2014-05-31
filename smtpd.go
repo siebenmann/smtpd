@@ -426,6 +426,13 @@ func (c *Conn) AcceptData(id string) {
 	c.reply("250 I've put it in a can called %s", id)
 	c.replied = true
 }
+func (c *Conn) RejectData(id string) {
+	if c.replied || c.curcmd != DATA || c.state != sPostData {
+		return
+	}
+	c.reply("554 Not put in a can called %s", id)
+	c.replied = true
+}
 
 func (c *Conn) Reject() {
 	switch c.curcmd {
