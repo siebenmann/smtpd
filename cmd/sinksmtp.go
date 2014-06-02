@@ -16,9 +16,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
+	"net/mail"
 	"os"
 	"smtpd"
+	"strings"
 	"time"
 )
 
@@ -28,6 +31,77 @@ const TimeNZ = "2006-01-02 15:04:05"
 func warnf(format string, elems ...interface{}) {
 	fmt.Fprintf(os.Stderr, "sinksmtp: "+format, elems...)
 }
+
+// ----
+// Address lists and address list lookup.
+type addrList map[string]bool
+
+func readList(rdr *bufio.Reader) (addrList, error) {
+	var err error
+	var a = make(addrList)
+	for {
+		line, err := rdr.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				return a, nil
+			} else {
+				return a, err
+			}
+		}
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' {
+			continue
+		}
+
+		line = strings.ToLower(line)
+		a[line] = true
+	}
+	return a, err
+}
+
+func loadList(fname string) addrList {
+	if fname == "" {
+		return nil
+	}
+	fp, err := os.Open(fname)
+	if err != nil {
+		return nil
+	}
+	defer fp.Close()
+	alist, err := readList(bufio.NewReader(fp))
+	if err != nil {
+		// We deliberately return a nil addrList on error instead
+		// of a partial one.
+		warnf("Problem loading addr list %s: %v\n", fname, err)
+		return nil
+	}
+	// If the list is completely empty after loading, we pretend
+	// that it's nil. This may change someday but it seems safest
+	// for now.
+	if len(alist) == 0 {
+		return nil
+	} else {
+		return alist
+	}
+}
+
+// def is what to return if the addrlist is nil.
+func inAddrList(addr string, alist addrList, def bool) bool {
+	if alist == nil {
+		return def
+	}
+	addr = strings.ToLower(addr)
+	idx := strings.IndexByte(addr, '@')
+	if idx != -1 {
+		local := addr[:idx+1]
+		domain := addr[idx:]
+		return alist[addr] || alist[local] || alist[domain]
+	} else {
+		return alist[addr]
+	}
+}
+
+// ----
 
 // This is used to log the SMTP commands et al for a given SMTP session.
 // It encapsulates the prefix. Perhaps we could do this some other way,
@@ -63,12 +137,33 @@ type smtpTransaction struct {
 	from         string
 	rcptto       []string
 
-	data string
-	hash string    // canonical hash of the data, currently SHA1
-	when time.Time // when the DATA was received.
+	data     string
+	hash     string    // canonical hash of the data, currently SHA1
+	bodyhash string    // canonical hash of the message body (no headers)
+	when     time.Time // when the DATA was received.
 
 	tlson  bool
 	cipher uint16
+}
+
+func getHashes(trans *smtpTransaction) (string, string) {
+	var hash, bodyhash string
+	h := sha1.New()
+	h.Write([]byte(trans.data))
+	hash = fmt.Sprintf("%x", h.Sum(nil))
+
+	msg, err := mail.ReadMessage(strings.NewReader(trans.data))
+	if err != nil {
+		return hash, "<cannot-parse-message>"
+	}
+	body, err := ioutil.ReadAll(msg.Body)
+	if err != nil {
+		return hash, "<cannot-read-body?>"
+	}
+	bh := sha1.New()
+	bh.Write(body)
+	bodyhash = fmt.Sprintf("%x", bh.Sum(nil))
+	return hash, bodyhash
 }
 
 func msgDetails(prefix string, trans *smtpTransaction, embedbody bool) []byte {
@@ -85,6 +180,7 @@ func msgDetails(prefix string, trans *smtpTransaction, embedbody bool) []byte {
 		fmt.Fprintf(writer, "to <%s>\n", a)
 	}
 	fmt.Fprintf(writer, "hash %s bytes %d\n", trans.hash, len(trans.data))
+	fmt.Fprintf(writer, "bodyhash %s\n", trans.bodyhash)
 	if embedbody {
 		fmt.Fprintf(writer, "body\n%s", trans.data)
 	}
@@ -105,8 +201,9 @@ func logMessage(prefix string, trans *smtpTransaction, logf io.Writer) {
 	for _, a := range trans.rcptto {
 		fmt.Fprintf(writer, " <%s>", a)
 	}
-	fmt.Fprintf(writer, ": message %d bytes hash %s | local %v helo '%s'",
-		len(trans.data), trans.hash, trans.laddr, trans.heloname)
+	fmt.Fprintf(writer, ": message %d bytes hash %s body %s | local %v helo '%s'",
+		len(trans.data), trans.hash, trans.bodyhash, trans.laddr,
+		trans.heloname)
 	if trans.tlson {
 		fmt.Fprintf(writer, " tls:cipher 0x%04x", trans.cipher)
 	}
@@ -147,6 +244,24 @@ func handleMessage(prefix string, trans *smtpTransaction, logf io.Writer) (strin
 	return hash, err
 }
 
+// We could do a better job of validating the EHLO if we wanted to,
+// eg looking for properly formed IPv4 and IPv6 literal addresses, but
+// no. This is a quick hack to get rid of obviously terrible things,
+// basically the people who EHLO with 'randomnodotsstring', because
+// they tend to be completely uninteresting spam.
+func acceptHelo(helo string) bool {
+	if !dothelo {
+		return true
+	}
+	idx := strings.IndexByte(helo, '.')
+	idx2 := strings.IndexByte(helo, ':') // for IPv6 literal addresses
+	if idx != -1 || idx2 != -1 {
+		return true
+	} else {
+		return false
+	}
+}
+
 func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.Writer) {
 	var evt smtpd.EventInfo
 	var convo *smtpd.Conn
@@ -156,6 +271,9 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 	trans.raddr = nc.RemoteAddr()
 	trans.laddr = nc.LocalAddr()
 	prefix := fmt.Sprintf("%d/%d", os.Getpid(), cid)
+
+	fromrej := loadList(fromreject)
+	toacpt := loadList(toaccept)
 
 	if smtplog != nil {
 		logger := &smtpLogger{}
@@ -185,7 +303,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 		case smtpd.COMMAND:
 			switch evt.Cmd {
 			case smtpd.EHLO, smtpd.HELO:
-				if failhelo {
+				if failhelo || !acceptHelo(evt.Arg) {
 					convo.Reject()
 					continue
 				}
@@ -199,11 +317,19 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 					convo.Reject()
 					continue
 				}
+				if evt.Arg != "" && inAddrList(evt.Arg, fromrej, false) {
+					convo.Reject()
+					continue
+				}
 				trans.from = evt.Arg
 				trans.data = ""
 				trans.rcptto = []string{}
 			case smtpd.RCPTTO:
 				if failrcpt {
+					convo.Reject()
+					continue
+				}
+				if !inAddrList(evt.Arg, toacpt, true) {
 					convo.Reject()
 					continue
 				}
@@ -220,9 +346,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 			trans.when = time.Now()
 			trans.tlson = convo.TLSOn
 			trans.cipher = convo.TLSCipher
-			h := sha1.New()
-			h.Write([]byte(trans.data))
-			trans.hash = fmt.Sprintf("%x", h.Sum(nil))
+			trans.hash, trans.bodyhash = getHashes(trans)
 			transid, err := handleMessage(prefix, trans, logf)
 			if err == nil {
 				if failgotdata {
@@ -250,6 +374,9 @@ var goslow bool
 var srvname string
 var savedir string
 var msghash bool
+var dothelo bool
+var fromreject string
+var toaccept string
 
 func openlogfile(fname string) (outf io.Writer, err error) {
 	if fname == "" {
@@ -282,6 +409,9 @@ func main() {
 	flag.BoolVar(&msghash, "hash-msg-only", false, "save files under the hash of the message only, not of their full information")
 	flag.StringVar(&certfile, "c", "", "TLS PEM certificate file")
 	flag.StringVar(&keyfile, "k", "", "TLS PEM key file")
+	flag.BoolVar(&dothelo, "dothelo", false, "require EHLO/HELO to contain a dot or a :")
+	flag.StringVar(&fromreject, "fromreject", "", "filename of address patterns to reject in MAIL FROMs")
+	flag.StringVar(&toaccept, "toaccept", "", "if set, filename of address patterns to accept in RCPT TOs")
 
 	flag.Parse()
 	if flag.NArg() != 1 {
