@@ -22,6 +22,7 @@ import (
 	"os"
 	"smtpd"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -102,6 +103,44 @@ func inAddrList(addr string, alist addrList, def bool) bool {
 }
 
 // ----
+
+// This is a blacklist of IPs that have TLS problems when talking to
+// us. If an IP is present and is more recent than tlsTimeout (3 days),
+// we don't advertise TLS to them even if we could.
+const tlsTimeout = time.Hour * 72
+
+var ipmap = struct {
+	sync.RWMutex
+	ips map[string]time.Time
+}{ips: make(map[string]time.Time)}
+
+func ipAdd(ip string) {
+	ipmap.Lock()
+	ipmap.ips[ip] = time.Now()
+	ipmap.Unlock()
+}
+func ipDel(ip string) {
+	ipmap.Lock()
+	delete(ipmap.ips, ip)
+	ipmap.Unlock()
+}
+
+func ipPresent(ip string) bool {
+	ipmap.RLock()
+	t := ipmap.ips[ip]
+	ipmap.RUnlock()
+	if t.IsZero() {
+		return false
+	}
+	if time.Now().Sub(t) < tlsTimeout {
+		return true
+	} else {
+		// Entry is stale, purge.
+		ipDel(ip)
+		return false
+	}
+}
+
 
 // This is used to log the SMTP commands et al for a given SMTP session.
 // It encapsulates the prefix. Perhaps we could do this some other way,
@@ -271,6 +310,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 	trans.raddr = nc.RemoteAddr()
 	trans.laddr = nc.LocalAddr()
 	prefix := fmt.Sprintf("%d/%d", os.Getpid(), cid)
+	rip, _, _ := net.SplitHostPort(nc.RemoteAddr().String())
 
 	fromrej := loadList(fromreject)
 	toacpt := loadList(toaccept)
@@ -290,7 +330,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 	if goslow {
 		convo.AddDelay(time.Second / 10)
 	}
-	if len(tlsc.Certificates) > 0 {
+	if len(tlsc.Certificates) > 0 && !ipPresent(rip) {
 		tlsc.ServerName = sname
 		convo.AddTLS(&tlsc)
 	}
@@ -356,6 +396,10 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 				}
 			} else {
 				convo.Tempfail()
+			}
+		case smtpd.TLSERROR:
+			if rip != "" {
+				ipAdd(rip)
 			}
 		}
 		if evt.What == smtpd.DONE || evt.What == smtpd.ABORT {

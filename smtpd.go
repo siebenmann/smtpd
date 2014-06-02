@@ -282,6 +282,7 @@ const (
 	GOTDATA
 	DONE
 	ABORT
+	TLSERROR
 )
 
 // Returned to higher levels on events.
@@ -587,7 +588,9 @@ func (c *Conn) Next() EventInfo {
 				if err != nil {
 					c.log("!", "TLS setup failed: %v", err)
 					c.state = sAbort
-					continue
+					evt.What = TLSERROR
+					evt.Arg = fmt.Sprintf("%v", err)
+					return evt
 				}
 				c.setupConn(tlsConn)
 				c.TLSOn = true
