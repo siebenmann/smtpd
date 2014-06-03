@@ -1,4 +1,3 @@
-//
 // A sinkhole SMTP server.
 // This accepts things and files them away, or perhaps refuses things for
 // you. It can log detailed transactions if desired.
@@ -111,7 +110,7 @@ import (
 	"net"
 	"net/mail"
 	"os"
-	"smtpd"
+	"github.com/siebenmann/smtpd"
 	"strings"
 	"sync"
 	"time"
@@ -629,10 +628,10 @@ func main() {
 		tlsConfig.SessionTicketsDisabled = true
 
 	case certfile != "":
-		warnf("certfile specified without keyfile")
+		warnf("certfile specified without keyfile\n")
 		return
 	case keyfile != "":
-		warnf("keyfile specified without certfile")
+		warnf("keyfile specified without certfile\n")
 		return
 	}
 
