@@ -2,19 +2,98 @@
 // A sinkhole SMTP server.
 // This accepts things and files them away, or perhaps refuses things for
 // you. It can log detailed transactions if desired.
+// Messages are received in all 8 bits, although we don't advertise
+// 8BITMIME.
 //
-// TODO: needs lots of comments.
-// TODO: needs to listen on multiple addresses
+// usage: sinksmtp [options] host:port [host:port ...]
 //
-
-// Address lists:
+// Options, sensibly organized:
+// -H, -F, -T, -D: reject everything after EHLO/HELO, MAIL FROM,
+//                 RCPT TO, or DATA respectively. No email will be received.
+// -M: always send a rejection after email messages are received (post-DATA).
+//     This rejection is 'fake' in that message details may be logged and
+//     messages may be saved, depending on other settings.
 //
+// -helo NAME: hostname to advertise in our greeting banner. If not set,
+//             we first try to look up the DNS name of the local IP of
+//             the connection, then just use the local 'IP:port' (which
+//             always exists). If DNS returns multiple names, we use the
+//             first.
+// -S: slow; send all server replies out to the network at a rate of one
+//     character every tenth of a second.
+//
+// -c FILE, -k FILE: provide TLS certificate and private key to enable TLS.
+//                   Both files must be PEM encoded. Self-signed is fine.
+//
+// -l FILE: log one line per fully received message to this file, may be '-'
+//          for standard output.
+// -smtplog FILE: log SMTP commands received and server output (and some
+//          additional info) to this file. May be '-' for stdout.
+//
+// -d DIR: save received messages to this directory; received files will
+//         be given probably-unique hash-based names. May be combined
+//         with -M, in which case messages will be logged then refused.
+//         If there already is a file with the same hash-based name, we
+//         don't save over top of it. You probably want -l too.
+//         The saved data includes message metadata.
+// -hash-msg-only: Base the hash name for received messages only on the
+//         email message contents themselves (the DATA), not metadata
+//         like MAIL FROM/RCPT TO/etc, which must be recovered from
+//         the message log (-l).
+// -force-receive: accept email messages even without a -d (or a -M).
+//
+// A message's hash-based name normally includes everything saved in
+// the save file, including message metadata and thus including the
+// time the message was received (down to the second) and the message's
+// mostly unique log id. This will normally give all messages a different
+// hash even if the email is identical.
+//
+// -fromreject FILE: reject any MAIL FROM that doesn't match something
+//         in this address list file.
+// -toaccept FILE: only accept RCPT TO addresses that match something
+//         in this address list file.
+// -dothelo: insist that every EHLO/HELO have a '.' or a ':', rejecting
+//           obviously bogus ones.
+//
+// Address lists are reloaded from scratch every time we start a new
+// connection. It is valid for them to not exist; this is the same as
+// not specifying one at all (ie, we accept everything).
 // Address lists are all matched as lower case. There are three sorts of
 // entries: 'a@b' (matches full address), 'a@' (matches a local part at
-// any domain), '@b' (matches any local part at the domain).
+// any domain), '@b' (matches any local part at the domain). Note that
+// our parsing of MAIL FROM/RCPT TO addresses is a bit naieve.
 // Address lists may have comments (start with a '#') and blank lines.
+// An empty address list (no actual entries) is treated as if it didn't
+// exist.
 //
-
+// LOG ENTRIES AND SAVE FILES:
+// The format of this information is hopefully obvious.
+// In save files, everything up to and including the 'body' line is
+// message metadata (ie all '<name> ...' lines, with lower-case
+// <name>s); the actual message starts below 'body'. A 'tls' line
+// will only appear if the message was received over TLS. The cipher
+// numbers are in octal because that is all net/tls gives us and I
+// have not yet built a mapping. 'bodyhash ...' may not actually be
+// a hash for sufficiently mangled messages.
+// The ID that is printed in a number of places is composed of the
+// the daemon's PID plus a sequence number of connections that this
+// daemon has handled; this is to hopefully let you disentangle
+// multiple simultaneous connections in eg SMTP command logs.
+// Note that 'remote-claimed-dns' is the results of an *unverified*
+// reverse reverse DNS lookup on the remote IP address. It could be
+// completely forged by someone. It may contain multiple names.
+// It may not be preset at all if remote DNS lookup has problems for
+// any reason.
+//
+// TLS: Go only supports SSLv3+ and we attempt to validate any client
+// certificate that clients present to us. Both can cause TLS setup to
+// fail (yes, there are apparently some MTAs that only support SSLv2).
+// When TLS setup fails we remember the client IP and don't offer TLS
+// to it if it reconnects within a certain amount of time (currently
+// 72 hours).
+//
+// TODO: needs lots of comments.
+//
 package main
 
 import (
@@ -233,6 +312,17 @@ func msgDetails(prefix string, trans *smtpTransaction) []byte {
 	fmt.Fprintf(writer, "id %s %s\n", prefix, trans.when.Format(TimeNZ))
 	fmt.Fprintf(writer, "remote %v to %v with helo '%s'\n", trans.raddr,
 		trans.laddr, trans.heloname)
+	rip, _, _ := net.SplitHostPort(trans.raddr.String())
+	if rip != "" {
+		nlst, err := net.LookupAddr(rip)
+		if err == nil && len(nlst) > 0 {
+			fmt.Fprintf(writer, "remote-claimed-dns")
+			for _, e := range nlst {
+				fmt.Fprintf(writer, " %s", e)
+			}
+			fmt.Fprintf(writer, "\n")
+		}
+	}
 	if trans.tlson {
 		fmt.Fprintf(writer, "tls on cipher 0x%04x\n", trans.cipher)
 	}
@@ -328,6 +418,7 @@ func acceptHelo(helo string) bool {
 	}
 }
 
+// Process a single connection.
 func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.Writer) {
 	var evt smtpd.EventInfo
 	var convo *smtpd.Conn
@@ -352,6 +443,15 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 	sname := trans.laddr.String()
 	if srvname != "" {
 		sname = srvname
+	} else {
+		lip, _, _ := net.SplitHostPort(sname)
+		nlst, err := net.LookupAddr(lip)
+		if err == nil && len(nlst) > 0 {
+			sname = nlst[0]
+			if sname[len(sname)-1] == '.' {
+				sname = sname[:len(sname)-1]
+			}
+		}
 	}
 	convo = smtpd.NewConn(nc, sname, l2)
 	convo.SayTime = true
@@ -438,6 +538,18 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 	nc.Close()
 }
 
+// Listen for new connections on a net.Listener, send the result to
+// the master.
+func listener(conn net.Listener, listenc chan net.Conn) {
+	for {
+		nc, err := conn.Accept()
+		if err == nil {
+			listenc <- nc
+		}
+	}
+}
+
+// Our absurd collection of global settings.
 var failhelo bool
 var failmail bool
 var failrcpt bool
@@ -487,8 +599,8 @@ func main() {
 	flag.StringVar(&toaccept, "toaccept", "", "if set, filename of address patterns to accept in RCPT TOs")
 
 	flag.Parse()
-	if flag.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: sinksmtp [options] host:port")
+	if flag.NArg() == 0 {
+		fmt.Fprintln(os.Stderr, "usage: sinksmtp [options] host:port [host:port ...]")
 		return
 	}
 	if savedir == "" && !(force || failhelo || failmail || failrcpt || faildata || failgotdata) {
@@ -543,18 +655,20 @@ func main() {
 		os.Remove(tstfile)
 	}
 
-	conn, err := net.Listen("tcp", flag.Arg(0))
-	if err != nil {
-		warnf("error listening to tcp!%s: %s\n", flag.Arg(0), err)
-		return
+	listenc := make(chan net.Conn)
+	for i := 0; i < flag.NArg(); i++ {
+		conn, err := net.Listen("tcp", flag.Arg(i))
+		if err != nil {
+			warnf("error listening to tcp!%s: %s\n", flag.Arg(i), err)
+			return
+		}
+		go listener(conn, listenc)
 	}
 
 	cid := 1
 	for {
-		nc, err := conn.Accept()
-		if err == nil {
-			go process(cid, nc, tlsConfig, logf, slogf)
-		}
+		nc := <-listenc
+		go process(cid, nc, tlsConfig, logf, slogf)
 		cid += 1
 	}
 }
