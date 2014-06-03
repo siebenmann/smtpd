@@ -458,6 +458,16 @@ func (c *Conn) Accept() {
 		if c.tlsc != nil && !c.TLSOn {
 			c.reply("250-STARTTLS")
 		}
+		// We do not advertise SIZE because our size limits
+		// are different from the size limits that RFC 1870
+		// wants us to use. We impose a flat byte limit while
+		// RFC 1870 wants us to not count quoted dots.
+		// Advertising SIZE would also require us to parse
+		// SIZE=... on MAIL FROM in order to 552 any too-large
+		// sizes.
+		// On the whole: pass. Cannot implement.
+		// (In general SIZE is hella annoying if you read the
+		// RFC religiously.)
 		c.reply("250 HELP")
 	case MAILFROM, RCPTTO:
 		c.reply("250 Okay, I'll believe you for now")
