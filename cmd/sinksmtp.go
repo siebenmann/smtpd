@@ -92,6 +92,9 @@
 // to it if it reconnects within a certain amount of time (currently
 // 72 hours).
 //
+// Note that sinksmtp never exits. You must kill it by hand to shut
+// it down.
+//
 // TODO: needs lots of comments.
 //
 package main
@@ -655,6 +658,9 @@ func main() {
 		os.Remove(tstfile)
 	}
 
+	// Set up a pool of listeners, one per address that we're supposed
+	// to be listening on. These are goroutines that multiplex back to
+	// us on listenc.
 	listenc := make(chan net.Conn)
 	for i := 0; i < flag.NArg(); i++ {
 		conn, err := net.Listen("tcp", flag.Arg(i))
@@ -665,6 +671,11 @@ func main() {
 		go listener(conn, listenc)
 	}
 
+	// Loop around getting new connections from our listeners and
+	// handing them off to be processed. We insist on sitting in
+	// the middle of the process so that we can maintain a global
+	// connection count index, cid, for the purposes of creating
+	// a semi-unique ID for each conversation.
 	cid := 1
 	for {
 		nc := <-listenc
