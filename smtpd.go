@@ -574,7 +574,7 @@ func addr_valid(a string) bool {
 // addresses, but it otherwise checks nothing; it will happily accept
 // garbage EHLO/HELOs and any random MAIL FROM or RCPT TO thing that
 // looks vaguely like an address. It is up to the caller to do more
-// validation and then call Reject() (or TempFail()) as appropriate.
+// validation and then call Reject() (or Tempfail()) as appropriate.
 // MAIL FROM addresses may be blank (""), indicating the null sender
 // ('<>').
 //
