@@ -255,11 +255,10 @@ func (log *smtpLogger) Write(b []byte) (n int, err error) {
 	//	return
 	//}
 
-	_, err = log.writer.Write(log.prefix)
-	if err != nil {
-		return 0, err
-	}
-	n, err = log.writer.Write(b)
+	var buf []byte
+	buf = append(buf, log.prefix...)
+	buf = append(buf, b...)
+	n, err = log.writer.Write(buf)
 	if err == nil {
 		err = log.writer.Flush()
 	}
@@ -438,7 +437,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 	if smtplog != nil {
 		logger := &smtpLogger{}
 		logger.prefix = []byte(prefix)
-		logger.writer = bufio.NewWriterSize(smtplog, 4096)
+		logger.writer = bufio.NewWriterSize(smtplog, 8*1024)
 		l2 = logger
 	}
 
