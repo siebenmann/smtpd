@@ -1,8 +1,22 @@
 //
+// Handle the low level of the server side of the SMTP protocol.
+// Normal callers should create a new connection with NewConn()
+// and then repeatedly call .Next() on it, which will return a
+// series of meaningful SMTP events, primarily EHLO/HELO, MAIL
+// FROM, RCPT TO, DATA, and then the message data if things get
+// that far.
 //
-// See http://en.wikipedia.org/wiki/Extended_SMTP#Extensions
+// The Conn framework puts timeouts on input and output and size
+// limits on input messages (and input lines, but that's much larger
+// than the RFC requires so it shouldn't matter). See DefaultLimits
+// and SetLimits().
+//
+// TODO: set the server software name somehow, for the greeting banner?
+// More control over the greeting banner?
 //
 package smtpd
+
+// See http://en.wikipedia.org/wiki/Extended_SMTP#Extensions
 
 import (
 	"bufio"
@@ -15,15 +29,17 @@ import (
 	"time"
 )
 
+// The time format we log messages in.
 const TimeFmt = "2006-01-02 15:04:05 -0700"
 
-// An enumeration of SMTP commands that we recognize, plus BadCmd for
-// 'no such command'.
+// The type of SMTP commands in encoded form
 type Command int
 
+// Recognized SMTP commands. Not all of them do anything
+// (eg AUTH, VRFY, and EXPN are just refused).
 const (
-	noCmd Command = iota // artificial zero value
-	BadCmd
+	noCmd  Command = iota // artificial zero value
+	BadCmd Command = iota
 	HELO
 	EHLO
 	MAILFROM
@@ -39,15 +55,13 @@ const (
 	STARTTLS
 )
 
-// The result of parsing a SMTP command line to determine the command,
-// command argument, optional parameter string for ESTMP MAIL FROM and
-// RCPT TO, and an err string if there was an error.
-// The err string is set if there was an error, empty otherwise.
+// A parsed SMTP command line. Err is set if there was an error, empty
+// otherwise. Cmd may be BadCmd or a command, even if there was an error.
 type ParsedLine struct {
-	cmd    Command
-	arg    string
-	params string // present only on ESMTP MAIL FROM and RCPT TO.
-	err    string
+	Cmd    Command
+	Arg    string
+	Params string // present only on ESMTP MAIL FROM and RCPT TO.
+	Err    string
 }
 
 // See http://www.ietf.org/rfc/rfc1869.txt for the general discussion of
@@ -85,7 +99,6 @@ var smtpCommand = []struct {
 	// TODO: do I need any additional SMTP commands?
 }
 
-// Turn a Command int into a string for debugging et al.
 func (v Command) String() string {
 	switch v {
 	case noCmd:
@@ -115,16 +128,16 @@ func isall7bit(b []byte) bool {
 	return true
 }
 
-// Parse a SMTP command line and return a ParsedLine structure of the
-// result. If there was an error, ParsedLine.err is non-empty.
+// Parse a SMTP command line and return the result.
+// The line should have the ending CR-NL already removed.
 func ParseCmd(line string) ParsedLine {
 	var res ParsedLine
-	res.cmd = BadCmd
+	res.Cmd = BadCmd
 
 	// We're going to upper-case this, which may explode on us if this
 	// is UTF-8 or anything that smells like it.
 	if !isall7bit([]byte(line)) {
-		res.err = "command contains non 7-bit ASCII"
+		res.Err = "command contains non 7-bit ASCII"
 		return res
 	}
 
@@ -141,7 +154,7 @@ func ParseCmd(line string) ParsedLine {
 		}
 	}
 	if found == -1 {
-		res.err = "unrecognized command"
+		res.Err = "unrecognized command"
 		return res
 	}
 
@@ -152,7 +165,7 @@ func ParseCmd(line string) ParsedLine {
 	llen := len(line)
 	clen := len(cmd.text)
 	if !(llen == clen || line[clen] == ' ' || line[clen] == ':') {
-		res.err = "unrecognized command"
+		res.Err = "unrecognized command"
 		return res
 	}
 
@@ -160,35 +173,35 @@ func ParseCmd(line string) ParsedLine {
 	// extraction and validation. At this point any remaining errors
 	// are command argument errors, so we set the command type in our
 	// result.
-	res.cmd = cmd.cmd
+	res.Cmd = cmd.cmd
 	switch cmd.argtype {
 	case noArg:
 		if llen != clen {
-			res.err = "SMTP command does not take an argument"
+			res.Err = "SMTP command does not take an argument"
 			return res
 		}
 	case mustArg:
 		if llen <= clen+1 {
-			res.err = "SMTP command requires an argument"
+			res.Err = "SMTP command requires an argument"
 			return res
 		}
 		// Even if there are nominal characters they could be
 		// all whitespace.
 		t := strings.TrimSpace(line[clen+1:])
 		if len(t) == 0 {
-			res.err = "SMTP command requires an argument"
+			res.Err = "SMTP command requires an argument"
 			return res
 		}
-		res.arg = t
+		res.Arg = t
 	case canArg:
 		if llen > clen+1 {
-			res.arg = strings.TrimSpace(line[clen+1:])
+			res.Arg = strings.TrimSpace(line[clen+1:])
 		}
 	case colonAddress:
 		var idx int
 		// Minimum llen is clen + ':<>', three characters
 		if llen < clen+3 {
-			res.err = "SMTP command requires an address"
+			res.Err = "SMTP command requires an address"
 			return res
 		}
 		// We explicitly check for '>' at the end of the string
@@ -205,18 +218,18 @@ func ParseCmd(line string) ParsedLine {
 		} else {
 			idx = strings.IndexByte(line, '>')
 			if idx != -1 && line[idx+1] != ' ' {
-				res.err = "improper argument formatting"
+				res.Err = "improper argument formatting"
 				return res
 			}
 		}
 		if !(line[clen] == ':' && line[clen+1] == '<') || idx == -1 {
-			res.err = "improper argument formatting"
+			res.Err = "improper argument formatting"
 			return res
 		}
-		res.arg = line[clen+2 : idx]
+		res.Arg = line[clen+2 : idx]
 		// As a side effect of this we generously allow trailing
 		// whitespace after RCPT TO and MAIL FROM. You're welcome.
-		res.params = strings.TrimSpace(line[idx+1 : llen])
+		res.Params = strings.TrimSpace(line[idx+1 : llen])
 	}
 	return res
 }
@@ -227,9 +240,11 @@ func ParseCmd(line string) ParsedLine {
 
 // States of the SMTP conversation. These are bits and can be masked
 // together.
+type conState int
+
 const (
-	sStartup = iota // Must be zero value
-	sInitial = 1 << iota
+	sStartup conState = iota // Must be zero value
+	sInitial conState = 1 << iota
 	sHelo
 	sMail
 	sRcpt
@@ -244,7 +259,7 @@ const (
 // A command not in the states map is handled in all states (probably to
 // be rejected).
 var states = map[Command]struct {
-	validin, next int
+	validin, next conState
 }{
 	HELO:     {sInitial | sHelo, sHelo},
 	EHLO:     {sInitial | sHelo, sHelo},
@@ -253,39 +268,70 @@ var states = map[Command]struct {
 	DATA:     {sRcpt, sData},
 }
 
+// Time and message size limits for Conn traffic.
+type Limits struct {
+	CmdInput time.Duration // client commands, eg MAIL FROM
+	MsgInput time.Duration // total time to get the email message itself
+	ReplyOut time.Duration // server replies to client commands
+	MsgSize  int64         // total size of an email message
+}
+
+// The default limits that are applied if you do not specify anything.
+// Two minutes for command input and command replies, ten minutes for
+// receiving messages, and 5 Mbytes of message size.
+//
+// Note that these limits are not necessarily RFC compliant, although
+// they should be enough for real email clients.
+var DefaultLimits = Limits{
+	CmdInput: 2 * time.Minute,
+	MsgInput: 10 * time.Minute,
+	ReplyOut: 2 * time.Minute,
+	MsgSize:  5 * 1024 * 1024,
+}
+
+// An ongoing SMTP connection. The TLS fields are read-only; the SayTime
+// field may be written to (and defaults to false).
+//
+// Note that this structure cannot be created by hand. Call NewConn.
+//
+// TODO: this structure is a mess. Clean it up somehow.
 type Conn struct {
 	conn   net.Conn
-	lr     *io.LimitedReader
-	rdr    *textproto.Reader // this is a wrapped version of lr.
+	lr     *io.LimitedReader // wraps conn as a reader
+	rdr    *textproto.Reader // wraps lr
 	logger io.Writer
 
-	tlsc      *tls.Config
-	TLSOn     bool
-	TLSCipher uint16
+	state   conState
+	badcmds int // count of bad commands so far
+	limits  Limits
+	delay   time.Duration // see SetDelay()
 
-	delay time.Duration
-
-	state   int
-	badcmds int
-	local   string // Local hostname for HELO/EHLO
-
+	// used for state tracking for Accept()/Reject()/Tempfail().
 	curcmd  Command
 	replied bool
-	nstate  int
+	nstate  conState // next state if command is accepted.
+
+	tlsc      *tls.Config
+	TLSOn     bool   // TLS is on in this connection
+	TLSCipher uint16 // Negociated TLS cipher. See net/tls.
+
+	SayTime bool   // put the time and date in the server banner
+	local   string // Local hostname for server banner
 }
 
 type Event int
 
+// The different types of SMTP events returned by Next()
 const (
-	_ Event = iota
-	COMMAND
+	_       Event = iota // make uninitialized Event an error.
+	COMMAND Event = iota
 	GOTDATA
 	DONE
 	ABORT
 	TLSERROR
 )
 
-// Returned to higher levels on events.
+// The events that Next() returns. Cmd and Arg come from ParsedLine.
 type EventInfo struct {
 	What Event
 	Cmd  Command
@@ -324,7 +370,7 @@ func (c *Conn) reply(format string, elems ...interface{}) {
 	// is that it returns a non-nil err if n < len(b).
 	// We are cautious about our write deadline.
 	wd := c.delay * time.Duration(len(b))
-	c.conn.SetWriteDeadline(time.Now().Add(2*time.Minute + wd))
+	c.conn.SetWriteDeadline(time.Now().Add(c.limits.ReplyOut + wd))
 	if c.delay > 0 {
 		_, err = c.slowWrite(b)
 	} else {
@@ -340,7 +386,7 @@ func (c *Conn) readCmd() string {
 	// This is much bigger than the RFC requires.
 	c.lr.N = 2048
 	// Allow two minutes per command.
-	c.conn.SetReadDeadline(time.Now().Add(2 * time.Minute))
+	c.conn.SetReadDeadline(time.Now().Add(c.limits.CmdInput))
 	line, err := c.rdr.ReadLine()
 	// abort not just on errors but if the line length is exhausted.
 	if err != nil || c.lr.N == 0 {
@@ -354,10 +400,8 @@ func (c *Conn) readCmd() string {
 }
 
 func (c *Conn) readData() string {
-	c.conn.SetReadDeadline(time.Now().Add(10 * time.Minute))
-	// TODO: better sizing. 5 Mbytes is relatively absurd, honestly.
-	// (but 128Kb caused one abort already)
-	c.lr.N = 5 * 1024 * 1024
+	c.conn.SetReadDeadline(time.Now().Add(c.limits.MsgInput))
+	c.lr.N = c.limits.MsgSize
 	b, err := c.rdr.ReadDotBytes()
 	if err != nil || c.lr.N == 0 {
 		c.state = sAbort
@@ -373,16 +417,26 @@ func (c *Conn) stopme() bool {
 	return c.state == sAbort || c.badcmds > 5 || c.state == sQuit
 }
 
+// Add support for TLS to the connection.
 // TLS must be added before Next() is called for the first time.
 func (c *Conn) AddTLS(tlsc *tls.Config) {
 	c.TLSOn = false
 	c.tlsc = tlsc
 }
 
+// Add a delay to the (server) output of every character in replies.
+// This annoys some spammers and may cause them to disconnect.
 func (c *Conn) AddDelay(delay time.Duration) {
 	c.delay = delay
 }
 
+// Set non-default conversation time and message size limits.
+func (c *Conn) SetLimits(limits Limits) {
+	c.limits = limits
+}
+
+// Accept the current SMTP command, ie give an appropriate 2xx reply to
+// the client.
 func (c *Conn) Accept() {
 	if c.replied {
 		return
@@ -427,6 +481,8 @@ func (c *Conn) AcceptData(id string) {
 	c.reply("250 I've put it in a can called %s", id)
 	c.replied = true
 }
+
+// Reject a DATA blob with an ID that is reported to the client.
 func (c *Conn) RejectData(id string) {
 	if c.replied || c.curcmd != DATA || c.state != sPostData {
 		return
@@ -435,6 +491,8 @@ func (c *Conn) RejectData(id string) {
 	c.replied = true
 }
 
+// Reject the current SMTP command, ie give the client an appropriate 5xx
+// reply.
 func (c *Conn) Reject() {
 	switch c.curcmd {
 	case HELO, EHLO:
@@ -446,6 +504,9 @@ func (c *Conn) Reject() {
 	}
 	c.replied = true
 }
+
+// Temporarily reject the current SMTP command, ie give the client an
+// appropriate 4xx reply.
 func (c *Conn) Tempfail() {
 	switch c.curcmd {
 	case HELO, EHLO:
@@ -481,16 +542,32 @@ func addr_valid(a string) bool {
 	return true
 }
 
-// Return the next event from the SMTP connection. For commands (and for
-// GOTDATA) the caller may call Reject() or Tempfail() to reject or tempfail
-// the command. Calling Accept() is optional; Next() will do it for you
-// implicitly.
-// Only HELO/EHLO, MAIL FROM, RCPT TO, DATA, and the actual message are
-// returned. Next() guarantees that the protocol ordering requirements
-// are met, so the called must reset all accumulated data when it sees
-// a MAIL FROM or HELO/EHLO.
+// Return the next high-level event from the SMTP connection.
+//
+// Next() guarantees that the SMTP protocol ordering requirements are
+// followed and only returns HELO/EHLO, MAIL FROM, RCPT TO, and DATA
+// commands, and the actual message submitted. The caller must reset
+// all accumulated information about a message when it sees either
+// EHLO/HELO or MAIL FROM.
+//
+// For commands and GOTDATA, the caller may call Reject() or
+// Tempfail() to reject or tempfail the command. Calling Accept() is
+// optional; Next() will do it for you implicitly.
 // It is invalid to call Next() after it has returned a DONE or ABORT
 // event.
+//
+// Next() does basic low-level validation of MAIL FROM and RCPT TO
+// addresses, but it otherwise checks nothing; it will happily accept
+// garbage EHLO/HELOs and any random MAIL FROM or RCPT TO thing that
+// looks vaguely like an address. It is up to the caller to do more
+// validation and then call Reject() (or TempFail()) as appropriate.
+// MAIL FROM addresses may be blank (""), indicating the null sender
+// ('<>').
+//
+// TLSERROR is returned if the client tried STARTTLS on a TLS-enabled
+// connection but the TLS setup failed for some reason (eg the client
+// only supports SSLv2). The caller can use this to, eg, decide not to
+// offer TLS to that client in the future.
 func (c *Conn) Next() EventInfo {
 	var evt EventInfo
 
@@ -502,7 +579,12 @@ func (c *Conn) Next() EventInfo {
 		// log preceeds the banner in case the banner hits an error.
 		c.log("#", "remote %v at %s", c.conn.RemoteAddr(),
 			time.Now().Format(TimeFmt))
-		c.reply("220 %s go-smtpd", c.local)
+		if c.SayTime {
+			c.reply("220 %s go-smtpd %s", c.local,
+				time.Now().Format(time.RFC1123Z))
+		} else {
+			c.reply("220 %s go-smtpd", c.local)
+		}
 	}
 
 	// Read DATA chunk if called for.
@@ -535,20 +617,20 @@ func (c *Conn) Next() EventInfo {
 		}
 
 		res := ParseCmd(line)
-		if res.cmd == BadCmd {
+		if res.Cmd == BadCmd {
 			c.badcmds += 1
-			c.reply("501 Bad: %s", res.err)
+			c.reply("501 Bad: %s", res.Err)
 			continue
 		}
 		// Is this command valid in this state at all?
-		t := states[res.cmd]
+		t := states[res.Cmd]
 		if t.validin != 0 && (t.validin&c.state) == 0 {
 			c.reply("503 Out of sequence command")
 			continue
 		}
 		// Error in command?
-		if len(res.err) > 0 {
-			c.reply("553 Garbled command: %s", res.err)
+		if len(res.Err) > 0 {
+			c.reply("553 Garbled command: %s", res.Err)
 			continue
 		}
 
@@ -556,7 +638,7 @@ func (c *Conn) Next() EventInfo {
 
 		// Handle simple commands that are valid in all states.
 		if t.validin == 0 {
-			switch res.cmd {
+			switch res.Cmd {
 			case NOOP:
 				c.reply("250 Okay")
 			case RSET:
@@ -610,16 +692,16 @@ func (c *Conn) Next() EventInfo {
 		// Full state commands
 		c.nstate = t.next
 		c.replied = false
-		c.curcmd = res.cmd
+		c.curcmd = res.Cmd
 		// Do initial checks on commands.
-		switch res.cmd {
+		switch res.Cmd {
 		case MAILFROM:
-			if !addr_valid(res.arg) {
+			if !addr_valid(res.Arg) {
 				c.Reject()
 				continue
 			}
 		case RCPTTO:
-			if len(res.arg) == 0 || !addr_valid(res.arg) {
+			if len(res.Arg) == 0 || !addr_valid(res.Arg) {
 				c.Reject()
 				continue
 			}
@@ -628,9 +710,9 @@ func (c *Conn) Next() EventInfo {
 		// Real, valid, in sequence command. Deliver it to our
 		// caller.
 		evt.What = COMMAND
-		evt.Cmd = res.cmd
+		evt.Cmd = res.Cmd
 		// TODO: does this hold down more memory than necessary?
-		evt.Arg = res.arg
+		evt.Arg = res.Arg
 		return evt
 	}
 
@@ -656,10 +738,18 @@ func (c *Conn) setupConn(conn net.Conn) {
 
 // Create a new SMTP conversation from conn, the network connection.
 // servername is the server name displayed in the greeting banner.
-// If non-nil log will receive a trace of SMTP commands and responses
-// (but not email messages themselves).
+// A trace of SMTP commands and responses (but not email messages) will
+// be written to log if it's non-nil.
+//
+// Log messages start with a character, then a space, then the
+// message.  'r' means read from network (client input), 'w' means
+// written to the network (server replies), '!'  means an error, and
+// '#' is tracking information for the start or the end of the
+// connection. Further information is up to whatever is behind 'log'
+// to add.
 func NewConn(conn net.Conn, servername string, log io.Writer) *Conn {
 	c := &Conn{state: sStartup, local: servername, logger: log}
 	c.setupConn(conn)
+	c.SetLimits(DefaultLimits)
 	return c
 }

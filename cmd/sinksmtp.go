@@ -4,6 +4,15 @@
 // you. It can log detailed transactions if desired.
 //
 // TODO: needs lots of comments.
+// TODO: needs to listen on multiple addresses
+//
+
+// Address lists:
+//
+// Address lists are all matched as lower case. There are three sorts of
+// entries: 'a@b' (matches full address), 'a@' (matches a local part at
+// any domain), '@b' (matches any local part at the domain).
+// Address lists may have comments (start with a '#') and blank lines.
 //
 
 package main
@@ -26,7 +35,7 @@ import (
 	"time"
 )
 
-// Time without the timezone.
+// Our message/logging time format is time without the timezone.
 const TimeNZ = "2006-01-02 15:04:05"
 
 func warnf(format string, elems ...interface{}) {
@@ -66,6 +75,9 @@ func loadList(fname string) addrList {
 	}
 	fp, err := os.Open(fname)
 	if err != nil {
+		// An address list that is missing entirely is not an
+		// error that we bother reporting. We only report IO
+		// errors reading the thing.
 		return nil
 	}
 	defer fp.Close()
@@ -114,17 +126,21 @@ var ipmap = struct {
 	ips map[string]time.Time
 }{ips: make(map[string]time.Time)}
 
+// add an IP to the IP map, with the current time
 func ipAdd(ip string) {
 	ipmap.Lock()
 	ipmap.ips[ip] = time.Now()
 	ipmap.Unlock()
 }
+
+// delete an IP from the map if present
 func ipDel(ip string) {
 	ipmap.Lock()
 	delete(ipmap.ips, ip)
 	ipmap.Unlock()
 }
 
+// is an IP present (and non-stale) in the map?
 func ipPresent(ip string) bool {
 	ipmap.RLock()
 	t := ipmap.ips[ip]
@@ -140,7 +156,6 @@ func ipPresent(ip string) bool {
 		return false
 	}
 }
-
 
 // This is used to log the SMTP commands et al for a given SMTP session.
 // It encapsulates the prefix. Perhaps we could do this some other way,
@@ -170,6 +185,9 @@ func (log *smtpLogger) Write(b []byte) (n int, err error) {
 	return n, err
 }
 
+// SMTP transaction data accumulated for a single message. If multiple
+// messages were delivered over the same Conn, some parts of this will
+// be reused.
 type smtpTransaction struct {
 	raddr, laddr net.Addr
 	heloname     string
@@ -179,12 +197,14 @@ type smtpTransaction struct {
 	data     string
 	hash     string    // canonical hash of the data, currently SHA1
 	bodyhash string    // canonical hash of the message body (no headers)
-	when     time.Time // when the DATA was received.
+	when     time.Time // when the email message data was received.
 
 	tlson  bool
 	cipher uint16
 }
 
+// returns overall hash and body-of-message hash. The latter may not
+// exist if the message is mangled, eg no actual body.
 func getHashes(trans *smtpTransaction) (string, string) {
 	var hash, bodyhash string
 	h := sha1.New()
@@ -205,7 +225,9 @@ func getHashes(trans *smtpTransaction) (string, string) {
 	return hash, bodyhash
 }
 
-func msgDetails(prefix string, trans *smtpTransaction, embedbody bool) []byte {
+// return a block of bytes that records the message details,
+// including the actual message itself.
+func msgDetails(prefix string, trans *smtpTransaction) []byte {
 	var outbuf bytes.Buffer
 	writer := bufio.NewWriter(&outbuf)
 	fmt.Fprintf(writer, "id %s %s\n", prefix, trans.when.Format(TimeNZ))
@@ -220,13 +242,12 @@ func msgDetails(prefix string, trans *smtpTransaction, embedbody bool) []byte {
 	}
 	fmt.Fprintf(writer, "hash %s bytes %d\n", trans.hash, len(trans.data))
 	fmt.Fprintf(writer, "bodyhash %s\n", trans.bodyhash)
-	if embedbody {
-		fmt.Fprintf(writer, "body\n%s", trans.data)
-	}
+	fmt.Fprintf(writer, "body\n%s", trans.data)
 	writer.Flush()
 	return outbuf.Bytes()
 }
 
+// Log details about the message to the logfile.
 func logMessage(prefix string, trans *smtpTransaction, logf io.Writer) {
 	if logf == nil {
 		return
@@ -251,16 +272,22 @@ func logMessage(prefix string, trans *smtpTransaction, logf io.Writer) {
 	logf.Write(outbuf.Bytes())
 }
 
+// Having received a message, do everything to it that we want to.
+// Here we log the message reception and possibly save it.
 func handleMessage(prefix string, trans *smtpTransaction, logf io.Writer) (string, error) {
 	var hash string
 	logMessage(prefix, trans, logf)
 	if savedir == "" {
 		return trans.hash, nil
 	}
-	// ... always include message for now.
-	m := msgDetails(prefix, trans, true)
-	// This saves one copy of every unique message, using the first
-	// set of details.
+	m := msgDetails(prefix, trans)
+	// msghash saves one copy of every unique message, using the first
+	// set of details for it in the recorded copy and counting on the
+	// message log for connecting up the details for later copies with
+	// it.
+	// (Saving this based on the *body* hash would lose data unless
+	// we saved the message headers separately and no let's not get
+	// that complicated.)
 	if msghash {
 		hash = trans.hash
 	} else {
@@ -327,6 +354,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 		sname = srvname
 	}
 	convo = smtpd.NewConn(nc, sname, l2)
+	convo.SayTime = true
 	if goslow {
 		convo.AddDelay(time.Second / 10)
 	}
@@ -351,6 +379,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 				trans.from = ""
 				trans.data = ""
 				trans.hash = ""
+				trans.bodyhash = ""
 				trans.rcptto = []string{}
 			case smtpd.MAILFROM:
 				if failmail {
@@ -466,6 +495,12 @@ func main() {
 		warnf("I refuse to accept email without either a -d savedir or --force-receive\n")
 		return
 	}
+	if msghash && logfile == "" {
+		// arguably we could rely on the SMTP log if there is one,
+		// but no.
+		warnf("-hash-msg-only requires a logfile right now\n")
+		return
+	}
 
 	switch {
 	case certfile != "" && keyfile != "":
@@ -483,12 +518,6 @@ func main() {
 		return
 	case keyfile != "":
 		warnf("keyfile specified without certfile")
-		return
-	}
-
-	conn, err := net.Listen("tcp", flag.Arg(0))
-	if err != nil {
-		warnf("error listening to tcp!%s: %s\n", flag.Arg(0), err)
 		return
 	}
 
@@ -512,6 +541,12 @@ func main() {
 		}
 		fp.Close()
 		os.Remove(tstfile)
+	}
+
+	conn, err := net.Listen("tcp", flag.Arg(0))
+	if err != nil {
+		warnf("error listening to tcp!%s: %s\n", flag.Arg(0), err)
+		return
 	}
 
 	cid := 1

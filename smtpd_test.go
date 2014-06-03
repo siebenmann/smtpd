@@ -62,14 +62,14 @@ func TestGoodParses(t *testing.T) {
 	var s ParsedLine
 	for _, inp := range smtpValidTests {
 		s = ParseCmd(inp.line)
-		if s.cmd != inp.cmd {
-			t.Fatalf("mismatched CMD result on '%s': got %v wanted %v", inp.line, s.cmd, inp.cmd)
+		if s.Cmd != inp.cmd {
+			t.Fatalf("mismatched CMD result on '%s': got %v wanted %v", inp.line, s.Cmd, inp.cmd)
 		}
-		if len(s.err) > 0 {
-			t.Fatalf("command failed on '%s': error '%s'", inp.line, s.err)
+		if len(s.Err) > 0 {
+			t.Fatalf("command failed on '%s': error '%s'", inp.line, s.Err)
 		}
-		if inp.arg != s.arg {
-			t.Fatalf("mismatched arg results on '%s': got %v expected %v", inp.line, s.arg, inp.arg)
+		if inp.arg != s.Arg {
+			t.Fatalf("mismatched arg results on '%s': got %v expected %v", inp.line, s.Arg, inp.arg)
 		}
 	}
 }
@@ -115,15 +115,15 @@ func TestBadParses(t *testing.T) {
 	var s ParsedLine
 	for _, inp := range smtpInvalidTests {
 		s = ParseCmd(inp.line)
-		if len(s.err) == 0 {
-			t.Fatalf("'%s' not detected as error: cmd %v arg '%v'", inp.line, s.cmd, s.arg)
+		if len(s.Err) == 0 {
+			t.Fatalf("'%s' not detected as error: cmd %v arg '%v'", inp.line, s.Cmd, s.Arg)
 		}
-		if inp.cmd != s.cmd {
-			t.Fatalf("mismatched CMD on '%s': got %v expected %v", inp.line, s.cmd, inp.cmd)
+		if inp.cmd != s.Cmd {
+			t.Fatalf("mismatched CMD on '%s': got %v expected %v", inp.line, s.Cmd, inp.cmd)
 		}
 
-		if len(inp.err) > 0 && inp.err != s.err {
-			t.Fatalf("wrong error string on '%s': got '%s' expected '%s'", inp.line, s.err, inp.err)
+		if len(inp.err) > 0 && inp.err != s.Err {
+			t.Fatalf("wrong error string on '%s': got '%s' expected '%s'", inp.line, s.Err, inp.err)
 		}
 	}
 }
@@ -132,12 +132,12 @@ func TestBadParses(t *testing.T) {
 func TestParam(t *testing.T) {
 	s := ParseCmd("MAIL FROM:<fred@barney.com> SIZE=1000")
 	// We assume that basic parsing works and don't check.
-	if s.params != "SIZE=1000" {
-		t.Fatalf("MAIL FROM params failed: expected 'SIZE=1000', got '%s'", s.params)
+	if s.Params != "SIZE=1000" {
+		t.Fatalf("MAIL FROM params failed: expected 'SIZE=1000', got '%s'", s.Params)
 	}
 	s = ParseCmd("MAIL FROM:<fred@barney.com>")
-	if len(s.params) > 0 {
-		t.Fatalf("MAIL FROM w/o params got a parms value of: '%s'", s.params)
+	if len(s.Params) > 0 {
+		t.Fatalf("MAIL FROM w/o params got a parms value of: '%s'", s.Params)
 	}
 }
 
