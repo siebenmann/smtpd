@@ -273,7 +273,9 @@ type Limits struct {
 	CmdInput time.Duration // client commands, eg MAIL FROM
 	MsgInput time.Duration // total time to get the email message itself
 	ReplyOut time.Duration // server replies to client commands
+	TlsSetup time.Duration // time limit to finish STARTTLS TLS setup
 	MsgSize  int64         // total size of an email message
+	BadCmds  int           // how many unknown commands before abort
 }
 
 // The default limits that are applied if you do not specify anything.
@@ -286,7 +288,9 @@ var DefaultLimits = Limits{
 	CmdInput: 2 * time.Minute,
 	MsgInput: 10 * time.Minute,
 	ReplyOut: 2 * time.Minute,
+	TlsSetup: 4 * time.Minute,
 	MsgSize:  5 * 1024 * 1024,
+	BadCmds:  5,
 }
 
 // An ongoing SMTP connection. The TLS fields are read-only; the SayTime
@@ -414,7 +418,7 @@ func (c *Conn) readData() string {
 }
 
 func (c *Conn) stopme() bool {
-	return c.state == sAbort || c.badcmds > 5 || c.state == sQuit
+	return c.state == sAbort || c.badcmds > c.limits.BadCmds || c.state == sQuit
 }
 
 // Add support for TLS to the connection.
@@ -623,6 +627,10 @@ func (c *Conn) Next() EventInfo {
 			continue
 		}
 		// Is this command valid in this state at all?
+		// Since we implicitly support PIPELINING, which can
+		// result in out of sequence commands when earlier ones
+		// fail, we don't count out of sequence commands as bad
+		// commands.
 		t := states[res.Cmd]
 		if t.validin != 0 && (t.validin&c.state) == 0 {
 			c.reply("503 Out of sequence command")
@@ -665,6 +673,11 @@ func (c *Conn) Next() EventInfo {
 				if c.state == sAbort {
 					continue
 				}
+				// Since we're about to start chattering on
+				// conn outside of our normal framework, we
+				// must reset both read and write timeouts
+				// to our TLS setup timeout.
+				c.conn.SetDeadline(time.Now().Add(c.limits.TlsSetup))
 				tlsConn := tls.Server(c.conn, c.tlsc)
 				err := tlsConn.Handshake()
 				if err != nil {
@@ -674,6 +687,12 @@ func (c *Conn) Next() EventInfo {
 					evt.Arg = fmt.Sprintf("%v", err)
 					return evt
 				}
+				// With TLS set up, we now want no read and
+				// write deadlines on the underlying
+				// connection. So cancel all deadlines by
+				// providing a zero value.
+				c.conn.SetReadDeadline(time.Time{})
+				// switch c.conn to tlsConn.
 				c.setupConn(tlsConn)
 				c.TLSOn = true
 				cs := tlsConn.ConnectionState()
@@ -716,6 +735,16 @@ func (c *Conn) Next() EventInfo {
 		return evt
 	}
 
+	// Explicitly mark and notify too many bad commands. This is
+	// an out of sequence 'reply', but so what, the client will
+	// see it if they send anything more. It will also go in the
+	// SMTP command log.
+	evt.Arg = ""
+	if c.badcmds > c.limits.BadCmds {
+		c.reply("554 Too many bad commands")
+		c.state = sAbort
+		evt.Arg = "too many bad commands"
+	}
 	if c.state == sQuit {
 		evt.What = DONE
 		c.log("#", "finished at %v", time.Now().Format(TimeFmt))
