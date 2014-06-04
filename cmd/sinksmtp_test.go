@@ -32,6 +32,7 @@ root@
 
 @example.com
 postmaster@Example.Org
+@.barney.net
 # t
 `
 var present = []string{
@@ -68,7 +69,9 @@ func TestMatching(t *testing.T) {
 var inAddrs = []string{
 	"INFO@FBI.GOV", "root@fred.com", "random@example.com",
 	"postmaster@example.org", "root@example.com",
+	"joe@fred.barney.net", "james@barney.net",
 }
 var outAddrs = []string{
 	"fred@fbi.gov", "postmaster@example.net", "fred@random.org",
+	"nosuch@james.net", "nosuch@barney.org",
 }

@@ -57,10 +57,12 @@
 // Address lists are reloaded from scratch every time we start a new
 // connection. It is valid for them to not exist; this is the same as
 // not specifying one at all (ie, we accept everything).
-// Address lists are all matched as lower case. There are three sorts of
-// entries: 'a@b' (matches full address), 'a@' (matches a local part at
-// any domain), '@b' (matches any local part at the domain). Note that
-// our parsing of MAIL FROM/RCPT TO addresses is a bit naieve.
+// Address lists are all matched as lower case. There are four sorts
+// of entries: 'a@b' (matches full address), 'a@' (matches a local
+// part at any domain), '@b' (matches any local part at the domain),
+// '@.b' (matches any local part at the domain b or any subdomains of
+// it). Note that our parsing of MAIL FROM/RCPT TO addresses is a bit
+// naive.
 // Address lists may have comments (start with a '#') and blank lines.
 // An empty address list (no actual entries) is treated as if it didn't
 // exist.
@@ -181,18 +183,33 @@ func loadList(fname string) addrList {
 
 // def is what to return if the addrlist is nil.
 func inAddrList(addr string, alist addrList, def bool) bool {
+	var ts string
 	if alist == nil {
 		return def
 	}
 	addr = strings.ToLower(addr)
 	idx := strings.IndexByte(addr, '@')
-	if idx != -1 {
-		local := addr[:idx+1]
-		domain := addr[idx:]
-		return alist[addr] || alist[local] || alist[domain]
-	} else {
+	if idx == -1 {
 		return alist[addr]
 	}
+	local := addr[:idx+1]
+	domain := addr[idx:]
+	if alist[addr] || alist[local] || alist[domain] {
+		return true
+	}
+	// Look for partial domain match
+	i := 1
+	id2 := strings.IndexByte(domain[i:], '.')
+	for ; id2 != -1 ; {
+		ts = "@" + domain[id2+i:]
+		if alist[ts] {
+			return true
+		}
+		i += id2 + 1
+		id2 = strings.IndexByte(domain[i:], '.')
+	}
+	ts = "@." + domain[1:]
+	return alist[ts]
 }
 
 // ----
