@@ -222,6 +222,10 @@ func ParseCmd(line string) ParsedLine {
 				return res
 			}
 		}
+		// NOTE: the RFC is explicit that eg 'MAIL FROM: <addr...>'
+		// is not valid, ie there cannot be a space between the : and
+		// the '<'. Some things invalidly generate it. We do not
+		// accept it.
 		if !(line[clen] == ':' && line[clen+1] == '<') || idx == -1 {
 			res.Err = "improper argument formatting"
 			return res
