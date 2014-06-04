@@ -280,6 +280,7 @@ type Limits struct {
 	TlsSetup time.Duration // time limit to finish STARTTLS TLS setup
 	MsgSize  int64         // total size of an email message
 	BadCmds  int           // how many unknown commands before abort
+	NoParams bool          // reject MAIL FROM/RCPT TO with parameters
 }
 
 // The default limits that are applied if you do not specify anything.
@@ -295,6 +296,7 @@ var DefaultLimits = Limits{
 	TlsSetup: 4 * time.Minute,
 	MsgSize:  5 * 1024 * 1024,
 	BadCmds:  5,
+	NoParams: true,
 }
 
 // An ongoing SMTP connection. The TLS fields are read-only; the SayTime
@@ -741,6 +743,15 @@ func (c *Conn) Next() EventInfo {
 				c.Reject()
 				continue
 			}
+		}
+		// reject parameters that we don't accept, which right
+		// now is all of them. We reject with the RFC-correct
+		// reply instead of a generic one, so we can't use
+		// c.Reject().
+		if res.Params != "" && c.limits.NoParams {
+			c.reply("504 Command parameter not implemented")
+			c.replied = true
+			continue
 		}
 
 		// Real, valid, in sequence command. Deliver it to our
