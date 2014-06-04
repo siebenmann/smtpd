@@ -342,7 +342,11 @@ func msgDetails(prefix string, trans *smtpTransaction) []byte {
 		}
 	}
 	if trans.tlson {
-		fmt.Fprintf(writer, "tls on cipher 0x%04x\n", trans.cipher)
+		fmt.Fprintf(writer, "tls on cipher 0x%04x", trans.cipher)
+		if cn := cipherNames[trans.cipher]; cn != "" {
+			fmt.Fprintf(writer, " name %s", cn)
+		}
+		fmt.Fprintf(writer, "\n")		
 	}
 	fmt.Fprintf(writer, "from <%s>\n", trans.from)
 	for _, a := range trans.rcptto {
