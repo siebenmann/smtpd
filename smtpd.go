@@ -540,6 +540,9 @@ func (c *Conn) Tempfail() {
 // Basically we want things that look like 'a@b.c': must have an @,
 // must not end with various bad characters, must have a '.' after
 // the @.
+// TODO: should we defer some or all of this to the caller?
+// BUG: Given IPv6 address literals we are probably technically incorrect
+// to require a '.' after the @.
 func addr_valid(a string) bool {
 	// caller must reject null address if appropriate.
 	if a == "" {

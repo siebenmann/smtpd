@@ -107,12 +107,12 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"github.com/siebenmann/smtpd"
 	"io"
 	"io/ioutil"
 	"net"
 	"net/mail"
 	"os"
-	"github.com/siebenmann/smtpd"
 	"strings"
 	"sync"
 	"time"
@@ -200,7 +200,7 @@ func inAddrList(addr string, alist addrList, def bool) bool {
 	// Look for partial domain match
 	i := 1
 	id2 := strings.IndexByte(domain[i:], '.')
-	for ; id2 != -1 ; {
+	for id2 != -1 {
 		ts = "@" + domain[id2+i:]
 		if alist[ts] {
 			return true
@@ -436,6 +436,24 @@ func acceptHelo(helo string) bool {
 	}
 }
 
+// Cannot be a route address (starts with '@') or terribly mangled (starts
+// with '<'). Must have a non-empty local part and domain part.
+// smtpd.go's addr_valid() has already checked that there is an '@' and
+// a '.' after the @.
+func isGoodAddress(addr string) bool {
+	if addr == "" {
+		return true
+	}
+	// We reject route addresses, and also people who send us
+	// 'MAIL FROM:<<....>>' (yes, they do this sometimes).
+	if addr[0] == '<' || addr[0] == '@' {
+		return false
+	}
+	// axiomatically '@' is not the first character so there is a
+	// non-null local part.
+	return true
+}
+
 // Process a single connection.
 func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.Writer) {
 	var evt smtpd.EventInfo
@@ -500,7 +518,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 				trans.bodyhash = ""
 				trans.rcptto = []string{}
 			case smtpd.MAILFROM:
-				if failmail {
+				if failmail || !isGoodAddress(evt.Arg) {
 					convo.Reject()
 					continue
 				}
@@ -512,7 +530,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 				trans.data = ""
 				trans.rcptto = []string{}
 			case smtpd.RCPTTO:
-				if failrcpt {
+				if failrcpt || !isGoodAddress(evt.Arg) {
 					convo.Reject()
 					continue
 				}
