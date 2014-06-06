@@ -56,6 +56,9 @@ var smtpValidTests = []struct {
 	// commands in lower case and mixed case, preserving argument case
 	{"mail from:<FreD@Barney>", MAILFROM, "FreD@Barney"},
 	{"Rcpt To:<joe@joe>", RCPTTO, "joe@joe"},
+
+	// Space after MAIL FROM:
+	{"MAIL FROM: <fred@barney>", MAILFROM, "fred@barney"},
 }
 
 func TestGoodParses(t *testing.T) {
@@ -91,7 +94,7 @@ var smtpInvalidTests = []struct {
 
 	// malformed or missing addresses
 	{"MAIL FROM <fred>", MAILFROM, ""},
-	{"RCPT TO: <fred> ", RCPTTO, ""},
+	{"RCPT TO:  <fred> ", RCPTTO, ""},
 	{"MAIL FROM:", MAILFROM, ""},
 	{"MAIL FROM:<", MAILFROM, ""},
 	{"MAIL FROM:<fred@barney", MAILFROM, ""},

@@ -224,13 +224,21 @@ func ParseCmd(line string) ParsedLine {
 		}
 		// NOTE: the RFC is explicit that eg 'MAIL FROM: <addr...>'
 		// is not valid, ie there cannot be a space between the : and
-		// the '<'. Some things invalidly generate it. We do not
-		// accept it.
-		if !(line[clen] == ':' && line[clen+1] == '<') || idx == -1 {
+		// the '<'. Normally we'd refuse to accept it, but a few too
+		// many things invalidly generate it.
+		if line[clen] != ':' || idx == -1 {
 			res.Err = "improper argument formatting"
 			return res
 		}
-		res.Arg = line[clen+2 : idx]
+		spos := clen+1
+		if line[spos] == ' ' {
+			spos += 1
+		}
+		if line[spos] != '<' {
+			res.Err = "improper argument formatting"
+			return res
+		}
+		res.Arg = line[spos+1 : idx]
 		// As a side effect of this we generously allow trailing
 		// whitespace after RCPT TO and MAIL FROM. You're welcome.
 		res.Params = strings.TrimSpace(line[idx+1 : llen])
