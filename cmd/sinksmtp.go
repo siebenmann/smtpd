@@ -193,20 +193,21 @@ func loadList(fname string) addrList {
 // and then ''.
 type sDotIter struct {
 	s string
-	p int    // points to the dot.
+	p int // points to the dot.
 }
+
 func (s *sDotIter) Next() string {
 	idx := strings.IndexByte(s.s[s.p+1:], '.')
 	if idx == -1 {
 		return ""
 	}
-	s.p += idx+1
+	s.p += idx + 1
 	return s.s[s.p:]
 }
 
 func inHostList(host string, alist addrList) bool {
 	host = strings.ToLower(host)
-	if alist[host] || alist["." + host] {
+	if alist[host] || alist["."+host] {
 		return true
 	}
 	si := &sDotIter{s: host}
@@ -386,7 +387,7 @@ func msgDetails(prefix string, trans *smtpTransaction) []byte {
 		if cn := cipherNames[trans.cipher]; cn != "" {
 			fmt.Fprintf(writer, " name %s", cn)
 		}
-		fmt.Fprintf(writer, "\n")		
+		fmt.Fprintf(writer, "\n")
 	}
 	fmt.Fprintf(writer, "from <%s>\n", trans.from)
 	for _, a := range trans.rcptto {

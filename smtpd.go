@@ -230,7 +230,7 @@ func ParseCmd(line string) ParsedLine {
 			res.Err = "improper argument formatting"
 			return res
 		}
-		spos := clen+1
+		spos := clen + 1
 		if line[spos] == ' ' {
 			spos += 1
 		}
