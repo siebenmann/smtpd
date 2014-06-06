@@ -47,10 +47,12 @@
 // mostly unique log id. This will normally give all messages a different
 // hash even if the email is identical.
 //
-// -fromreject FILE: reject any MAIL FROM that doesn't match something
+// -fromreject FILE: reject any MAIL FROM that matches something
 //         in this address list file.
 // -toaccept FILE: only accept RCPT TO addresses that match something
 //         in this address list file.
+// -heloreject FILE: reject any EHLO/HELO name that matches something in
+//         in this host list file.
 // -dothelo: insist that every EHLO/HELO have a '.' or a ':', rejecting
 //           obviously bogus ones.
 //
@@ -68,6 +70,10 @@
 // Address lists may have comments (start with a '#') and blank lines.
 // An empty address list (no actual entries) is treated as if it didn't
 // exist.
+//
+// Host lists are like address lists except without the '@'. A name
+// with no leading dots matches that name; a name with a starting '.'
+// matches that name or any subdomains of it.
 //
 // LOG ENTRIES AND SAVE FILES:
 // The format of this information is hopefully obvious.
@@ -196,6 +202,20 @@ func (s *sDotIter) Next() string {
 	}
 	s.p += idx+1
 	return s.s[s.p:]
+}
+
+func inHostList(host string, alist addrList) bool {
+	host = strings.ToLower(host)
+	if alist[host] || alist["." + host] {
+		return true
+	}
+	si := &sDotIter{s: host}
+	for h := si.Next(); h != ""; h = si.Next() {
+		if alist[h] {
+			return true
+		}
+	}
+	return false
 }
 
 // def is what to return if the addrlist is nil.
@@ -483,6 +503,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 	var evt smtpd.EventInfo
 	var convo *smtpd.Conn
 	var l2 io.Writer
+	var poisoned bool
 
 	trans := &smtpTransaction{}
 	trans.raddr = nc.RemoteAddr()
@@ -492,6 +513,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 
 	fromrej := loadList(fromreject)
 	toacpt := loadList(toaccept)
+	helorej := loadList(heloreject)
 
 	if smtplog != nil {
 		logger := &smtpLogger{}
@@ -535,6 +557,16 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 					convo.Reject()
 					continue
 				}
+				// If a host is listed in the no-EHLO list,
+				// we don't immediately reject it; historically
+				// some MTAs have not liked that. We defer
+				// rejection until MAIL FROM.
+				// Note that poisoning is permanent; once
+				// you EHLO with a bad name, it cannot be
+				// reset.
+				if inHostList(evt.Arg, helorej) {
+					poisoned = true
+				}
 				trans.heloname = evt.Arg
 				trans.from = ""
 				trans.data = ""
@@ -550,11 +582,19 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 					convo.Reject()
 					continue
 				}
+				// Trivial root: we accept MAIL FROM:<>
+				// even from poisoned hosts and defer rejection
+				// to RCPT TO time. This is more RFC compliant
+				// and therefor less likely to cause MTAs to
+				// choke.
+				if evt.Arg != "" && poisoned {
+					convo.Reject()
+				}
 				trans.from = evt.Arg
 				trans.data = ""
 				trans.rcptto = []string{}
 			case smtpd.RCPTTO:
-				if failrcpt || !isGoodAddress(evt.Arg) {
+				if failrcpt || !isGoodAddress(evt.Arg) || poisoned {
 					convo.Reject()
 					continue
 				}
@@ -622,6 +662,7 @@ var msghash bool
 var dothelo bool
 var fromreject string
 var toaccept string
+var heloreject string
 
 func openlogfile(fname string) (outf io.Writer, err error) {
 	if fname == "" {
@@ -655,8 +696,9 @@ func main() {
 	flag.StringVar(&certfile, "c", "", "TLS PEM certificate file")
 	flag.StringVar(&keyfile, "k", "", "TLS PEM key file")
 	flag.BoolVar(&dothelo, "dothelo", false, "require EHLO/HELO to contain a dot or a :")
-	flag.StringVar(&fromreject, "fromreject", "", "filename of address patterns to reject in MAIL FROMs")
-	flag.StringVar(&toaccept, "toaccept", "", "if set, filename of address patterns to accept in RCPT TOs")
+	flag.StringVar(&fromreject, "fromreject", "", "if set, filename of address patterns to reject in MAIL FROMs")
+	flag.StringVar(&toaccept, "toaccept", "", "if set, filename of address patterns to accept in RCPT TOs (all others will be rejected if there are any entries in the file)")
+	flag.StringVar(&heloreject, "heloreject", "", "if set, filename of address patterns to reject in EHLO/HELO names")
 
 	flag.Parse()
 	if flag.NArg() == 0 {
