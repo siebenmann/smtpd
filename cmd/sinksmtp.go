@@ -63,6 +63,8 @@
 // '@.b' (matches any local part at the domain b or any subdomains of
 // it). Note that our parsing of MAIL FROM/RCPT TO addresses is a bit
 // naive.
+// As a degenerate case, a simple '@' matches everything. Use this with
+// care.
 // Address lists may have comments (start with a '#') and blank lines.
 // An empty address list (no actual entries) is treated as if it didn't
 // exist.
@@ -181,6 +183,21 @@ func loadList(fname string) addrList {
 	}
 }
 
+// Iterate through a string of the form 'a.b.c', returning '.b.c', '.c',
+// and then ''.
+type sDotIter struct {
+	s string
+	p int    // points to the dot.
+}
+func (s *sDotIter) Next() string {
+	idx := strings.IndexByte(s.s[s.p+1:], '.')
+	if idx == -1 {
+		return ""
+	}
+	s.p += idx+1
+	return s.s[s.p:]
+}
+
 // def is what to return if the addrlist is nil.
 func inAddrList(addr string, alist addrList, def bool) bool {
 	var ts string
@@ -198,16 +215,19 @@ func inAddrList(addr string, alist addrList, def bool) bool {
 		return true
 	}
 	// Look for partial domain match
-	i := 1
-	id2 := strings.IndexByte(domain[i:], '.')
-	for id2 != -1 {
-		ts = "@" + domain[id2+i:]
+	// Note that domain starts with an @, so we must skip it when
+	// setting things up.
+	// trivial root: a bare '@' matches everything.
+	// TODO: do I want this? Allowing it makes this code simpler,
+	// though.
+	si := &sDotIter{s: domain[1:]}
+	for ts != "@" {
+		ts = "@" + si.Next()
 		if alist[ts] {
 			return true
 		}
-		i += id2 + 1
-		id2 = strings.IndexByte(domain[i:], '.')
 	}
+	// base case: we have '@dom.ain' and want to match a '@.dom.ain' entry
 	ts = "@." + domain[1:]
 	return alist[ts]
 }
