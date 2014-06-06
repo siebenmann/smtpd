@@ -91,8 +91,8 @@
 // Note that 'remote-claimed-dns' is the results of an *unverified*
 // reverse reverse DNS lookup on the remote IP address. It could be
 // completely forged by someone. It may contain multiple names.
-// It may not be preset at all if remote DNS lookup has problems for
-// any reason.
+// It may not be present at all if remote DNS lookup has problems for
+// any reason and obviously won't be if there is no reverse DNS.
 //
 // TLS: Go only supports SSLv3+ and we attempt to validate any client
 // certificate that clients present to us. Both can cause TLS setup to
