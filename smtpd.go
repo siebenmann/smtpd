@@ -400,6 +400,14 @@ func (c *Conn) reply(format string, elems ...interface{}) {
 	}
 }
 
+func fmtBytesLeft(max, cur int64) string {
+	if cur == 0 {
+		return "0 bytes left"
+	} else {
+		return fmt.Sprintf("%d bytes read", max-cur)
+	}
+}
+
 func (c *Conn) readCmd() string {
 	// This is much bigger than the RFC requires.
 	c.lr.N = 2048
@@ -410,7 +418,8 @@ func (c *Conn) readCmd() string {
 	if err != nil || c.lr.N == 0 {
 		c.state = sAbort
 		line = ""
-		c.log("!", "command abort %d bytes left err: %v", c.lr.N, err)
+		c.log("!", "command abort %s err: %v",
+			fmtBytesLeft(2048, c.lr.N), err)
 	} else {
 		c.log("r", line)
 	}
@@ -424,7 +433,8 @@ func (c *Conn) readData() string {
 	if err != nil || c.lr.N == 0 {
 		c.state = sAbort
 		b = nil
-		c.log("!", "DATA abort %d bytes left err: %v", c.lr.N, err)
+		c.log("!", "DATA abort %s err: %v",
+			fmtBytesLeft(c.limits.MsgSize, c.lr.N), err)
 	} else {
 		c.log("r", ". <end of data>")
 	}
