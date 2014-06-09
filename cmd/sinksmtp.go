@@ -768,7 +768,7 @@ func main() {
 		die("-save-hash=msg requires a logfile right now\n")
 	}
 	if !(hashtype == "msg" || hashtype == "full" || hashtype == "all") {
-		die("bad value for -save-hash: '%s'. Only msg, full, and all are valid.\n")
+		die("bad value for -save-hash: '%s'. Only msg, full, and all are valid.\n", hashtype)
 	}
 
 	switch {
