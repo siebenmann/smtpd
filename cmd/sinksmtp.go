@@ -86,11 +86,13 @@
 // the daemon's PID plus a sequence number of connections that this
 // daemon has handled; this is to hopefully let you disentangle
 // multiple simultaneous connections in eg SMTP command logs.
-// Note that 'remote-claimed-dns' is the results of an *unverified*
-// reverse reverse DNS lookup on the remote IP address. It could be
-// completely forged by someone. It may contain multiple names.
-// It may not be present at all if remote DNS lookup has problems for
-// any reason and obviously won't be if there is no reverse DNS.
+//
+// 'remote-claimed-dns' is the raw, unverified reverse DNS lookup on
+// the remote IP address. 'remote-dns' is the verified version (ie,
+// only reverse DNS results that have a forward DNS entry that points
+// to the remote IP, as opposed to names with no forward entries or
+// conflicting forward entries). These are present only if there are
+// applicable DNS results.
 //
 // TLS: Go only supports SSLv3+ and we attempt to validate any client
 // certificate that clients present to us. Both can cause TLS setup to
@@ -290,6 +292,9 @@ var ipmap = struct {
 
 // add an IP to the IP map, with the current time
 func ipAdd(ip string) {
+	if ip == "" {
+		return
+	}
 	ipmap.Lock()
 	ipmap.ips[ip] = time.Now()
 	ipmap.Unlock()
@@ -360,6 +365,10 @@ type smtpTransaction struct {
 	bodyhash string    // canonical hash of the message body (no headers)
 	when     time.Time // when the email message data was received.
 
+	rip      string
+	revdns   []string // raw reverse DNS of rip
+	vernames []string // verified reverse DNS of rip
+
 	tlson  bool
 	cipher uint16
 }
@@ -400,18 +409,22 @@ func msgDetails(prefix string, trans *smtpTransaction) ([]byte, string) {
 	fmt.Fprintf(fwrite, "id %s %v %s\n", prefix, trans.raddr,
 		trans.when.Format(TimeNZ))
 	writer := bufio.NewWriter(&outbuf2)
-	rip, _, _ := net.SplitHostPort(trans.raddr.String())
-	rmsg := rip
+	rmsg := trans.rip
 	if rmsg == "" {
 		rmsg = trans.raddr.String()
 	}
 	fmt.Fprintf(writer, "remote %s to %v with helo '%s'\n", rmsg,
 		trans.laddr, trans.heloname)
-	if rip != "" {
-		nlst, err := net.LookupAddr(rip)
-		if err == nil && len(nlst) > 0 {
-			fmt.Fprintf(writer, "remote-claimed-dns")
-			for _, e := range nlst {
+	if len(trans.revdns) > 0 {
+		fmt.Fprintf(writer, "remote-claimed-dns")
+		for _, e := range trans.revdns {
+			fmt.Fprintf(writer, " %s", e)
+		}
+		fmt.Fprintf(writer, "\n")
+		// vernames only exists at all if revdns is non-empty.
+		if len(trans.vernames) > 0 {
+			fmt.Fprintf(writer, "remote-dns")
+			for _, e := range trans.vernames {
 				fmt.Fprintf(writer, " %s", e)
 			}
 			fmt.Fprintf(writer, "\n")
@@ -568,7 +581,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 	trans.raddr = nc.RemoteAddr()
 	trans.laddr = nc.LocalAddr()
 	prefix := fmt.Sprintf("%d/%d", os.Getpid(), cid)
-	rip, _, _ := net.SplitHostPort(nc.RemoteAddr().String())
+	trans.rip, _, _ = net.SplitHostPort(nc.RemoteAddr().String())
 
 	fromrej := loadList(fromreject)
 	toacpt := loadList(toaccept)
@@ -586,6 +599,9 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 		sname = srvname
 	} else {
 		lip, _, _ := net.SplitHostPort(sname)
+		// we don't do a verified lookup of the local IP address
+		// because it's theoretically under your control, so if
+		// you want to forge stuff that's up to you.
 		nlst, err := net.LookupAddr(lip)
 		if err == nil && len(nlst) > 0 {
 			sname = nlst[0]
@@ -599,10 +615,15 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 	if goslow {
 		convo.AddDelay(time.Second / 10)
 	}
-	if len(tlsc.Certificates) > 0 && !ipPresent(rip) {
+	if len(tlsc.Certificates) > 0 && !ipPresent(trans.rip) {
 		tlsc.ServerName = sname
 		convo.AddTLS(&tlsc)
 	}
+
+	// Yes, we do rDNS lookup before our initial greeting banner and
+	// thus can pause a bit here. Clients will cope, or at least we
+	// don't care if impatient ones don't.
+	trans.revdns, trans.vernames, _ = LookupAddrVerified(trans.rip)
 
 	// Main transaction loop. We gather up email messages as they come
 	// in, possibly failing various operations as we're told to.
@@ -686,9 +707,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 				convo.Tempfail()
 			}
 		case smtpd.TLSERROR:
-			if rip != "" {
-				ipAdd(rip)
-			}
+			ipAdd(trans.rip)
 		}
 		if evt.What == smtpd.DONE || evt.What == smtpd.ABORT {
 			break
