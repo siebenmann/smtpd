@@ -696,14 +696,17 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 			trans.cipher = convo.TLSCipher
 			trans.hash, trans.bodyhash = getHashes(trans)
 			transid, err := handleMessage(prefix, trans, logf)
-			if err == nil {
+			// errors when handling a message always force
+			// a tempfail regardless of how we're
+			// configured.
+			if err != nil {
+				convo.Tempfail()
+			} else {
 				if failgotdata {
 					convo.RejectData(transid)
 				} else {
 					convo.AcceptData(transid)
 				}
-			} else {
-				convo.Tempfail()
 			}
 		case smtpd.TLSERROR:
 			ipAdd(trans.rip)
