@@ -162,7 +162,6 @@ func die(format string, elems ...interface{}) {
 type addrList map[string]bool
 
 func readList(rdr *bufio.Reader) (addrList, error) {
-	var err error
 	var a = make(addrList)
 	for {
 		line, err := rdr.ReadString('\n')
@@ -181,7 +180,7 @@ func readList(rdr *bufio.Reader) (addrList, error) {
 		line = strings.ToLower(line)
 		a[line] = true
 	}
-	return a, err
+	// Cannot be reached; for loop has no breaks.
 }
 
 func loadList(fname string) addrList {
@@ -553,6 +552,12 @@ func isGoodAddress(addr string) bool {
 }
 
 // Process a single connection.
+// We take tlsc as a value instead of a literal because we are going to
+// change it (to set tlsc.ServerName). This causes 'go vet' to complain
+// that we are copying a lock (in an internal field in tls.Config). This
+// is true but it's also the case that we're passing an unused tls.Config
+// in, so the lock should be at its zero value. Right now I decline to make
+// the code more elaborate to pacify 'go vet'.
 func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.Writer) {
 	var evt smtpd.EventInfo
 	var convo *smtpd.Conn
