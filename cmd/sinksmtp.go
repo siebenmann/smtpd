@@ -35,10 +35,8 @@
 //         If there already is a file with the same hash-based name, we
 //         don't save over top of it. You probably want -l too.
 //         The saved data includes message metadata.
-// -hash-msg-only: Base the hash name for received messages only on the
-//         email message contents themselves (the DATA), not metadata
-//         like MAIL FROM/RCPT TO/etc, which must be recovered from
-//         the message log (-l).
+// -save-hash TYPE: Base the hash name on one of three things. See HASH
+//         NAMING later. Valid types are 'msg', 'full', and 'all'.
 // -force-receive: accept email messages even without a -d (or a -M).
 //
 // A message's hash-based name normally includes everything saved in
@@ -101,6 +99,27 @@
 // to it if it reconnects within a certain amount of time (currently
 // 72 hours).
 //
+// HASH NAMING:
+//
+// With -d DIR set up, sinksmtp saves messages under a hash name computed
+// for them. There are three possible hash names and 'all' is the default:
+//
+// 'msg' uses only the email contents themselves (the DATA) and doesn't
+// include metadata like MAIL FROM/RCPT TO/etc, which must be recovered
+// from the message log (-l). This requires -l to be set.
+//
+// 'full' adds metadata about the message to the hash (everything except
+// what appears on the 'id' line). If senders improperly resend messages
+// despite a 5xx rejection after the DATA is transmitted, this should
+// result in you saving only one copy of each fully unique message.
+//
+// 'all' adds all metadata, including the message ID and timestamp.
+// It will almost always be completely unique (well, assuming no hash
+// collisions in SHA1 and the sender doesn't send two copies from the
+// same source port in the same second).
+//
+// -----
+//
 // Note that sinksmtp never exits. You must kill it by hand to shut
 // it down.
 //
@@ -131,6 +150,11 @@ const TimeNZ = "2006-01-02 15:04:05"
 
 func warnf(format string, elems ...interface{}) {
 	fmt.Fprintf(os.Stderr, "sinksmtp: "+format, elems...)
+}
+
+func die(format string, elems ...interface{}) {
+	warnf(format, elems...)
+	os.Exit(1)
 }
 
 // ----
@@ -343,11 +367,16 @@ type smtpTransaction struct {
 
 // returns overall hash and body-of-message hash. The latter may not
 // exist if the message is mangled, eg no actual body.
+func genHash(b []byte) string {
+	h := sha1.New()
+	h.Write(b)
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
 func getHashes(trans *smtpTransaction) (string, string) {
 	var hash, bodyhash string
-	h := sha1.New()
-	h.Write([]byte(trans.data))
-	hash = fmt.Sprintf("%x", h.Sum(nil))
+
+	hash = genHash([]byte(trans.data))
 
 	msg, err := mail.ReadMessage(strings.NewReader(trans.data))
 	if err != nil {
@@ -357,21 +386,28 @@ func getHashes(trans *smtpTransaction) (string, string) {
 	if err != nil {
 		return hash, "<cannot-read-body?>"
 	}
-	bh := sha1.New()
-	bh.Write(body)
-	bodyhash = fmt.Sprintf("%x", bh.Sum(nil))
+	bodyhash = genHash(body)
 	return hash, bodyhash
 }
 
 // return a block of bytes that records the message details,
-// including the actual message itself.
-func msgDetails(prefix string, trans *smtpTransaction) []byte {
-	var outbuf bytes.Buffer
-	writer := bufio.NewWriter(&outbuf)
-	fmt.Fprintf(writer, "id %s %s\n", prefix, trans.when.Format(TimeNZ))
-	fmt.Fprintf(writer, "remote %v to %v with helo '%s'\n", trans.raddr,
-		trans.laddr, trans.heloname)
+// including the actual message itself. We also return a hash of what
+// we consider the constant data about this message, which included
+// envelope metadata and the source IP and its DNS information.
+func msgDetails(prefix string, trans *smtpTransaction) ([]byte, string) {
+	var outbuf, outbuf2 bytes.Buffer
+
+	fwrite := bufio.NewWriter(&outbuf)
+	fmt.Fprintf(fwrite, "id %s %v %s\n", prefix, trans.raddr,
+		trans.when.Format(TimeNZ))
+	writer := bufio.NewWriter(&outbuf2)
 	rip, _, _ := net.SplitHostPort(trans.raddr.String())
+	rmsg := rip
+	if rmsg == "" {
+		rmsg = trans.raddr.String()
+	}
+	fmt.Fprintf(writer, "remote %s to %v with helo '%s'\n", rmsg,
+		trans.laddr, trans.heloname)
 	if rip != "" {
 		nlst, err := net.LookupAddr(rip)
 		if err == nil && len(nlst) > 0 {
@@ -397,7 +433,10 @@ func msgDetails(prefix string, trans *smtpTransaction) []byte {
 	fmt.Fprintf(writer, "bodyhash %s\n", trans.bodyhash)
 	fmt.Fprintf(writer, "body\n%s", trans.data)
 	writer.Flush()
-	return outbuf.Bytes()
+	metahash := genHash(outbuf2.Bytes())
+	fwrite.Write(outbuf2.Bytes())
+	fwrite.Flush()
+	return outbuf.Bytes(), metahash
 }
 
 // Log details about the message to the logfile.
@@ -433,21 +472,35 @@ func handleMessage(prefix string, trans *smtpTransaction, logf io.Writer) (strin
 	if savedir == "" {
 		return trans.hash, nil
 	}
-	m := msgDetails(prefix, trans)
-	// msghash saves one copy of every unique message, using the first
-	// set of details for it in the recorded copy and counting on the
-	// message log for connecting up the details for later copies with
-	// it.
-	// (Saving this based on the *body* hash would lose data unless
-	// we saved the message headers separately and no let's not get
-	// that complicated.)
-	if msghash {
+	m, mhash := msgDetails(prefix, trans)
+	// There are three possible hashes for message naming:
+	//
+	// 'msg' uses only the DATA (actual email) and counts on the
+	// transaction log to recover metadata.
+	//
+	// 'full' adds all metadata except the ID line and the sender
+	// port; this should squelch duplicates that emerge from
+	// things that resend after a rejected DATA transaction.
+	//
+	// 'all' adds even the ID line and the sender port, which is
+	// very likely to be completely unique for every message (a
+	// sender would have to reuse the same source port for a
+	// message received within a second).
+	//
+	// There is no option to save based on the body hash alone,
+	// because that would lose data unless we saved the message
+	// headers separately and no let's not get that complicated.
+	switch hashtype {
+	case "msg":
 		hash = trans.hash
-	} else {
-		h := sha1.New()
-		h.Write(m)
-		hash = fmt.Sprintf("%x", h.Sum(nil))
+	case "full":
+		hash = mhash
+	case "all":
+		hash = genHash(m)
+	default:
+		panic(fmt.Sprintf("unhandled hashtype '%s'", hashtype))
 	}
+
 	tgt := savedir + "/" + hash
 	fp, err := os.OpenFile(tgt, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0666)
 	if err == nil {
@@ -659,7 +712,7 @@ var failgotdata bool
 var goslow bool
 var srvname string
 var savedir string
-var msghash bool
+var hashtype string
 var dothelo bool
 var fromreject string
 var toaccept string
@@ -693,7 +746,7 @@ func main() {
 	flag.StringVar(&logfile, "l", "", "filename of the transaction log, no default")
 	flag.StringVar(&savedir, "d", "", "directory to save received messages in")
 	flag.BoolVar(&force, "force-receive", false, "force accepting email even without a savedir")
-	flag.BoolVar(&msghash, "hash-msg-only", false, "save files under the hash of the message only, not of their full information")
+	flag.StringVar(&hashtype, "save-hash", "all", "hash name for saved messages is based on the actual message ('msg'), message plus most envelope metadata ('full'), or all available information including timestamp ('all')")
 	flag.StringVar(&certfile, "c", "", "TLS PEM certificate file")
 	flag.StringVar(&keyfile, "k", "", "TLS PEM key file")
 	flag.BoolVar(&dothelo, "dothelo", false, "require EHLO/HELO to contain a dot or a :")
@@ -707,52 +760,47 @@ func main() {
 		return
 	}
 	if savedir == "" && !(force || failhelo || failmail || failrcpt || faildata || failgotdata) {
-		warnf("I refuse to accept email without either a -d savedir or --force-receive\n")
-		return
+		die("I refuse to accept email without either a -d savedir or --force-receive\n")
 	}
-	if msghash && logfile == "" {
+	if hashtype == "msg" && logfile == "" {
 		// arguably we could rely on the SMTP log if there is one,
 		// but no.
-		warnf("-hash-msg-only requires a logfile right now\n")
-		return
+		die("-save-hash=msg requires a logfile right now\n")
+	}
+	if !(hashtype == "msg" || hashtype == "full" || hashtype == "all") {
+		die("bad value for -save-hash: '%s'. Only msg, full, and all are valid.\n")
 	}
 
 	switch {
 	case certfile != "" && keyfile != "":
 		cert, err := tls.LoadX509KeyPair(certfile, keyfile)
 		if err != nil {
-			warnf("error loading TLS cert from %s & %s: %v\n", certfile, keyfile, err)
-			return
+			die("error loading TLS cert from %s & %s: %v\n", certfile, keyfile, err)
 		}
 		tlsConfig.Certificates = []tls.Certificate{cert}
 		tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
 		tlsConfig.SessionTicketsDisabled = true
 
 	case certfile != "":
-		warnf("certfile specified without keyfile\n")
-		return
+		die("certfile specified without keyfile\n")
 	case keyfile != "":
-		warnf("keyfile specified without certfile\n")
-		return
+		die("keyfile specified without certfile\n")
 	}
 
 	slogf, err := openlogfile(smtplogfile)
 	if err != nil {
-		warnf("error opening SMTP log file '%s': %v\n", smtplogfile, err)
-		return
+		die("error opening SMTP log file '%s': %v\n", smtplogfile, err)
 	}
 	logf, err := openlogfile(logfile)
 	if err != nil {
-		warnf("error opening logfile '%s': %v\n", logfile, err)
-		return
+		die("error opening logfile '%s': %v\n", logfile, err)
 	}
 
 	if savedir != "" {
 		tstfile := savedir + "/.wecanmake"
 		fp, err := os.Create(tstfile)
 		if err != nil {
-			warnf("cannot create test file in savedir '%s': %v\n", savedir, err)
-			return
+			die("cannot create test file in savedir '%s': %v\n", savedir, err)
 		}
 		fp.Close()
 		os.Remove(tstfile)
@@ -765,8 +813,7 @@ func main() {
 	for i := 0; i < flag.NArg(); i++ {
 		conn, err := net.Listen("tcp", flag.Arg(i))
 		if err != nil {
-			warnf("error listening to tcp!%s: %s\n", flag.Arg(i), err)
-			return
+			die("error listening to tcp!%s: %s\n", flag.Arg(i), err)
 		}
 		go listener(conn, listenc)
 	}
