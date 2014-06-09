@@ -87,12 +87,13 @@
 // daemon has handled; this is to hopefully let you disentangle
 // multiple simultaneous connections in eg SMTP command logs.
 //
-// 'remote-claimed-dns' is the raw, unverified reverse DNS lookup on
-// the remote IP address. 'remote-dns' is the verified version (ie,
-// only reverse DNS results that have a forward DNS entry that points
-// to the remote IP, as opposed to names with no forward entries or
-// conflicting forward entries). These are present only if there are
-// applicable DNS results.
+// 'remote-dns' is the fully verified reverse DNS lookup results, ie
+// only reverse DNS names that include the remote IP as one of their
+// IP addresses in a forward lookup. 'remote-dns-nofwd' is reverse
+// DNS results that did not have a successful forward lookup;
+// 'remote-dns-inconsist' is names that looked up but don't have the
+// remote IP listed as one of their IPs. Some or all may be missing
+// depending on DNS lookup results.
 //
 // TLS: Go only supports SSLv3+ and we attempt to validate any client
 // certificate that clients present to us. Both can cause TLS setup to
@@ -365,9 +366,8 @@ type smtpTransaction struct {
 	bodyhash string    // canonical hash of the message body (no headers)
 	when     time.Time // when the email message data was received.
 
-	rip      string
-	revdns   []string // raw reverse DNS of rip
-	vernames []string // verified reverse DNS of rip
+	rip  string
+	rdns *rDnsResults
 
 	tlson  bool
 	cipher uint16
@@ -398,6 +398,17 @@ func getHashes(trans *smtpTransaction) (string, string) {
 	return hash, bodyhash
 }
 
+func writeDnsList(writer io.Writer, pref string, dlist []string) {
+	if len(dlist) == 0 {
+		return
+	}
+	fmt.Fprintf(writer, pref)
+	for _, e := range dlist {
+		fmt.Fprintf(writer, " %s", e)
+	}
+	fmt.Fprintf(writer, "\n")
+}
+
 // return a block of bytes that records the message details,
 // including the actual message itself. We also return a hash of what
 // we consider the constant data about this message, which included
@@ -415,21 +426,9 @@ func msgDetails(prefix string, trans *smtpTransaction) ([]byte, string) {
 	}
 	fmt.Fprintf(writer, "remote %s to %v with helo '%s'\n", rmsg,
 		trans.laddr, trans.heloname)
-	if len(trans.revdns) > 0 {
-		fmt.Fprintf(writer, "remote-claimed-dns")
-		for _, e := range trans.revdns {
-			fmt.Fprintf(writer, " %s", e)
-		}
-		fmt.Fprintf(writer, "\n")
-		// vernames only exists at all if revdns is non-empty.
-		if len(trans.vernames) > 0 {
-			fmt.Fprintf(writer, "remote-dns")
-			for _, e := range trans.vernames {
-				fmt.Fprintf(writer, " %s", e)
-			}
-			fmt.Fprintf(writer, "\n")
-		}
-	}
+	writeDnsList(writer, "remote-dns", trans.rdns.verified)
+	writeDnsList(writer, "remote-dns-nofwd", trans.rdns.nofwd)
+	writeDnsList(writer, "remote-dns-inconsist", trans.rdns.inconsist)
 	if trans.tlson {
 		fmt.Fprintf(writer, "tls on cipher 0x%04x", trans.cipher)
 		if cn := cipherNames[trans.cipher]; cn != "" {
@@ -623,7 +622,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 	// Yes, we do rDNS lookup before our initial greeting banner and
 	// thus can pause a bit here. Clients will cope, or at least we
 	// don't care if impatient ones don't.
-	trans.revdns, trans.vernames, _ = LookupAddrVerified(trans.rip)
+	trans.rdns, _ = LookupAddrVerified(trans.rip)
 
 	// Main transaction loop. We gather up email messages as they come
 	// in, possibly failing various operations as we're told to.
