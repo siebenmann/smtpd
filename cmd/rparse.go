@@ -111,8 +111,15 @@ func (p *Parser) pArg(t *TempN) (good bool, err *string) {
 // at any time.
 var minReq = map[itemType]Phase{
 	itemFrom: pMfrom, itemHelo: pHelo, itemTo: pRto,
+	// because 'address ..' applies to both MAIL FROM and RCPT TO,
+	// it can't be processed until we start seeing RCPT TO or it
+	// may miss.
 	itemAddress: pRto, itemFromAddr: pMfrom, itemToAddr: pRto,
-	itemGreeted: pHelo, itemTls: pMfrom,
+	itemGreeted: pHelo,
+	// We can't be sure that TLS is set up until we've seen a
+	// MAIL FROM, because the first HELO/EHLO will be without
+	// TLS and then they will STARTTLS again.
+	itemTls: pMfrom,
 }
 
 func (p *Parser) pTerm() (expr Expr, err *string) {
