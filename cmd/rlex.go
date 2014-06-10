@@ -330,13 +330,20 @@ func lexWord(l *lexer) stateFn {
 }
 
 // Within a line, move forward to the next non-whitespace and dispatch
-// to handling either a special or a word.
+// to handling either a special or a word. We also eat line continuations
+// (which must be literally \<newline>, no whitespace between the two).
+// Note that line continuations must have whitespace before them.
 func lexLineRunning(l *lexer) stateFn {
 	skipWhitespace(l)
 	r := l.peek()
-	if specials[r] != itemError {
+	switch {
+	case r == '\\' && strings.HasPrefix(l.input[l.pos:], "\\\n"):
+		l.pos += 2
+		l.swallow()
+		return lexLineRunning
+	case specials[r] != itemError:
 		return lexSpecial
-	} else {
+	default:
 		return lexWord
 	}
 }
@@ -369,6 +376,17 @@ func lexLineStart(l *lexer) stateFn {
 	case '#':
 		l.next()
 		return lexComment
+	case '\\':
+		// We basically treat continuations at the end of empty
+		// lines as if they were fully blank lines, because that
+		// seems like the best option.
+		if strings.HasPrefix(l.input[l.pos:], "\\\n") {
+			l.pos += 2
+			l.swallow()
+			return lexLineStart
+		} else {
+			return lexWord
+		}
 	case '\n':
 		// We swallow blank lines instead of feeding higher
 		// levels a stream of itemEOLs.

@@ -76,6 +76,9 @@ var lexTests = []lexTest{
 	{"embedded comment", "stall from @\n # a comment\nreject to @a",
 		[]item{itm("stall"), itm("from"), itv("@"), tEOL,
 			itm("reject"), itm("to"), itv("@a"), tEOF}},
+	{"line continuation", " \\\n stall from @ \\\n  to a@b", []item{
+		itm("stall"), itm("from"), itv("@"), itm("to"), itv("a@b"),
+		tEOF}},
 }
 
 func collect(input string) (items []item) {
