@@ -29,6 +29,10 @@
 // Default is to accept.
 //
 // phases: helo, mfrom, rto, data, message (DATA received)
+//
+// QUESTION: what does or do? Eg:
+//	reject from info@fbi.gov to fred@barney or to joe@jim
+// ... rejects from: info@fbi.gov, to either fred or joe.
 package main
 
 var defaultRules = `

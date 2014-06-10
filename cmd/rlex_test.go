@@ -46,8 +46,8 @@ type lexTest struct {
 var (
 	tEOF   = item{itemEOF, "", 0}
 	tComma = item{itemComma, ",", 0}
-	tLB    = item{itemLbracket, "(", 0}
-	tRB    = item{itemRbracket, ")", 0}
+	tLB    = item{itemLparen, "(", 0}
+	tRB    = item{itemRparen, ")", 0}
 	tEOL   = item{itemEOL, "\n", 0}
 )
 

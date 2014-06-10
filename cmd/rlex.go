@@ -48,10 +48,14 @@ const (
 	// markers
 	itemEOF
 	itemEOL
+
+	// this marks the start of items that have a valid value.
+	itemHasValue
+
 	// punctuation:
 	itemComma
-	itemLbracket
-	itemRbracket
+	itemLparen
+	itemRparen
 
 	// general values
 	itemValue
@@ -177,8 +181,8 @@ func (i item) String() string {
 
 var specials = map[int]itemType{
 	',':  itemComma,
-	'(':  itemLbracket,
-	')':  itemRbracket,
+	'(':  itemLparen,
+	')':  itemRparen,
 	'\n': itemEOL,
 	eof:  itemEOF,
 }
