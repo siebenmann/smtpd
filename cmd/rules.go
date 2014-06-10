@@ -8,11 +8,10 @@
 //
 // RULE is a series of operations. Primitives are:
 //	from ADDRESS. to ADDRESS. helo HOST
-//	address ADDR-OPTIONS, from-address ADDR-OPTIONS,
-//	to-address ADDR-OPTIONS
+//	from-has ADDR-OPTIONS, to-has ADDR-OPTIONS
 //	greeted helo,ehlo,none,nodots,bareip
 //	tls on|off, host HOST
-//      dns nodns,inconsistent,noforward
+//	dns nodns,inconsistent,noforward
 // ADDR-OPTIONS: unqualified,route,quoted,noat,garbage,bad
 // *-OPTIONS are or'd together. 'bad' is all but 'quoted'.
 // 'host' is a verified DNS name. Maybe IP netblocks in the future?

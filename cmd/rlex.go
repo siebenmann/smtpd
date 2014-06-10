@@ -87,9 +87,8 @@ const (
 	// rule keywords not already mentioned, eg itemHelo
 	itemFrom
 	itemTo
-	itemAddress
-	itemFromAddr
-	itemToAddr
+	itemFromHas
+	itemToHas
 	itemGreeted
 	itemTls
 	itemHost
@@ -133,15 +132,14 @@ var keywords = map[string]itemType{
 	"or":  itemOr,
 	"not": itemNot,
 	// rule operations
-	"from":         itemFrom,
-	"to":           itemTo,
-	"address":      itemAddress,
-	"from-address": itemFromAddr,
-	"to-address":   itemToAddr,
-	"greeted":      itemGreeted,
-	"tls":          itemTls,
-	"host":         itemHost,
-	"dns":          itemDns,
+	"from":     itemFrom,
+	"to":       itemTo,
+	"from-has": itemFromHas,
+	"to-has":   itemToHas,
+	"greeted":  itemGreeted,
+	"tls":      itemTls,
+	"host":     itemHost,
+	"dns":      itemDns,
 	// options
 	"ehlo":         itemEhlo,
 	"none":         itemNone,

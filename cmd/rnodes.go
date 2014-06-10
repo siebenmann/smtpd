@@ -127,7 +127,12 @@ func (o *OrN) Eval(ti *TransInfo) (r Result, e error) {
 	return o.right.Eval(ti)
 }
 
-// Actual matching nodes
+//
+// ---
+// Terminal nodes that match things.
+//
+
+// TEMPORARY HACK
 type TempN struct {
 	what string
 	arg  string
