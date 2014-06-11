@@ -569,13 +569,14 @@ func (c *Conn) Tempfail() {
 // It is invalid to call Next() after it has returned a DONE or ABORT
 // event.
 //
-// Next() does basic low-level validation of MAIL FROM and RCPT TO
-// addresses, but it otherwise checks nothing; it will happily accept
-// garbage EHLO/HELOs and any random MAIL FROM or RCPT TO thing that
-// looks vaguely like an address. It is up to the caller to do more
-// validation and then call Reject() (or Tempfail()) as appropriate.
-// MAIL FROM addresses may be blank (""), indicating the null sender
-// ('<>').
+// Next() does almost no checks on the value of EHLO/HELO, MAIL FROM,
+// and RCPT TO. For MAIL FROM and RCPT TO it requires them to
+// actually be present, but that's about it. It will accept blank
+// EHLO/HELO (ie, no argument at all).  It is up to the caller to do
+// more validation and then call Reject() (or Tempfail()) as
+// appropriate.  MAIL FROM addresses may be blank (""), indicating the
+// null sender ('<>'). RCPT TO addresses cannot be; Next() will fail
+// those itself.
 //
 // TLSERROR is returned if the client tried STARTTLS on a TLS-enabled
 // connection but the TLS setup failed for some reason (eg the client
