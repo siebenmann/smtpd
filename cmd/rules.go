@@ -259,6 +259,7 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 		c.rcptto = evt.Arg
 	}
 
+	c.last = ph
 	for _, r := range c.ruleset {
 		// either this rule has already done everything it can or
 		// we can't do it yet.
