@@ -9,7 +9,7 @@
 // RULE is a series of operations. Primitives are:
 //	from ADDRESS. to ADDRESS. helo-as HOST
 //	from-has ADDR-OPTIONS, to-has ADDR-OPTIONS
-//	helo-with helo,ehlo,none,nodots,bareip
+//	helo-has helo,ehlo,none,nodots,bareip
 //	tls on|off, host HOST
 //	dns nodns,inconsistent,noforward,good
 //      all
