@@ -12,11 +12,21 @@ import (
 
 var aParse = `
 accept from a@b
-data reject to b@c or to fred or from a@b helo barney
+@data reject to b@c or to fred or from a@b helo barney
 stall from a@b not to d@e or (helo barney to charlie host fred)
 reject helo somename from info@fbi.gov not to interesting@addr
-reject greeted none,nodots,helo from-has bad,quoted dns nodns
-message reject to-has garbage,route
+reject helo-with none,nodots,helo from-has bad,quoted dns nodns
+@message reject to-has garbage,route
+accept dns good
+reject dns noforward,inconsistent
+
+# test all options for comma-separated things.
+accept dns good or dns noforward,inconsistent,nodns
+accept tls on or tls off
+accept from-has unqualified,route,quoted,noat,garbage,bad
+accept to-has unqualified,route,quoted,noat,garbage,bad
+accept helo-with helo,ehlo,none,nodots,bareip
+
 `
 
 func TestParse(t *testing.T) {
@@ -57,11 +67,13 @@ accept all
 accept from jim@jones.com to joe@example.com not dns nodns
 accept to joe@ from @.com
 accept dns inconsistent dns noforward
-accept greeted ehlo tls on
-accept not greeted nodots from @.net or dns nodns or to @.com
-accept greeted nodots or (from @jones.com to @example.com)
+accept helo-with ehlo tls on
+accept not helo-with nodots from @.net or dns nodns or to @.com
+accept helo-with nodots or (from @jones.com to @example.com)
 accept from jim@jones.com to info@fbi.gov or to joe@example.com
 accept not (from jim@ to @logan)
+# dns is not good because there are inconsistent and noforward stuff
+accept not dns good
 `
 
 func TestSuccess(t *testing.T) {

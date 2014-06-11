@@ -14,7 +14,7 @@ import (
 // a squence of rules
 //
 // rule  -> [phase] [toall] what orl EOL|EOF
-// phase -> HELO | MFROM | RTO | DATA | MESSAGE
+// phase -> @HELO | @FROM | @TO | @DATA | @MESSAGE
 // what  -> ACCEPT | REJECT | STALL
 // andl  -> orl [andl]
 // orl   -> term [OR orl]
@@ -124,7 +124,7 @@ func (p *Parser) pOnOff() (on bool, err *string) {
 // Minimum phase requirements for various things that cannot be evaluated
 // at any time.
 var minReq = map[itemType]Phase{
-	itemFrom: pMfrom, itemHelo: pHelo, itemTo: pRto,
+	itemFrom: pMfrom, itemHeloAs: pHelo, itemTo: pRto,
 	itemFromHas: pMfrom, itemToHas: pRto, itemGreeted: pHelo,
 	// We can't be sure that TLS is set up until we've seen a
 	// MAIL FROM, because the first HELO/EHLO will be without
@@ -138,6 +138,7 @@ var heloMap = map[itemType]Option{
 }
 var dnsMap = map[itemType]Option{
 	itemNodns: oNodns, itemInconsistent: oInconsist, itemNoforward: oNofwd,
+	itemGood: oGood,
 }
 var addrMap = map[itemType]Option{
 	itemUnqualified: oUnqualified, itemRoute: oRoute, itemQuoted: oQuoted,
@@ -282,8 +283,8 @@ func (p *Parser) pOrl() (expr Expr, err *string) {
 }
 
 var phases = map[itemType]Phase{
-	itemHelo: pHelo, itemMfrom: pMfrom, itemRto: pRto, itemData: pData,
-	itemMessage: pMessage,
+	itemAHelo: pHelo, itemAFrom: pMfrom, itemATo: pRto, itemAData: pData,
+	itemAMessage: pMessage,
 }
 
 func (p *Parser) pPhase() {

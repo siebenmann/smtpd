@@ -22,8 +22,8 @@ const (
 )
 
 var pMap = map[Phase]string{
-	pAny: "any", pHelo: "helo", pMfrom: "mailfrom",
-	pRto: "rcptto", pData: "data", pMessage: "message",
+	pAny: "@any", pHelo: "@helo", pMfrom: "@from",
+	pRto: "@to", pData: "@data", pMessage: "@message",
 }
 
 func (p Phase) String() string {
@@ -32,12 +32,13 @@ func (p Phase) String() string {
 
 type Action int
 
+// Actions are in order from weakest (accept) to strongest (reject)
 const (
 	aError Action = iota
 	aNoresult
 	aAccept
-	aReject
 	aStall
+	aReject
 )
 
 var aMap = map[Action]string{
@@ -65,6 +66,7 @@ const (
 	oNodns
 	oInconsist
 	oNofwd
+	oGood
 
 	// address options
 	oUnqualified
@@ -89,10 +91,10 @@ type Rule struct {
 
 func (r *Rule) String() string {
 	if r.deferto != pAny {
-		return fmt.Sprintf("<@%v: %v %v %s >", r.requires,
+		return fmt.Sprintf("<%v: %v %v %s >", r.requires,
 			r.deferto, r.result, r.expr.String())
 	} else {
-		return fmt.Sprintf("<@%v: %v %s >", r.requires, r.result,
+		return fmt.Sprintf("<%v: %v %s >", r.requires, r.result,
 			r.expr.String())
 	}
 }
@@ -317,7 +319,7 @@ func newDnsOpt(o Option) Expr {
 }
 
 func newHeloOpt(o Option) Expr {
-	return &OptionN{what: "greeted", opts: o, getter: heloGetter}
+	return &OptionN{what: "helo-with", opts: o, getter: heloGetter}
 }
 
 func getFromOpts(c *Context) Option {

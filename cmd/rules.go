@@ -2,16 +2,16 @@
 // Processing rules:
 // [phase] accept|reject|stall RULE ....
 //
-// [phase] defers doing the accept or reject until a particular phase
-// is reached, eg 'data reject from @b.com' rejects MAIL FROM @b.com at the
-// DATA phase. Note that this rule is *matched* at the MAIL FROM phase.
+// [phase] defers matching the rule until a particular phase is
+// reached, eg '@data reject from @b.com' rejects MAIL FROM @b.com at
+// the DATA phase.
 //
 // RULE is a series of operations. Primitives are:
-//	from ADDRESS. to ADDRESS. helo HOST
+//	from ADDRESS. to ADDRESS. helo-as HOST
 //	from-has ADDR-OPTIONS, to-has ADDR-OPTIONS
-//	greeted helo,ehlo,none,nodots,bareip
+//	helo-with helo,ehlo,none,nodots,bareip
 //	tls on|off, host HOST
-//	dns nodns,inconsistent,noforward
+//	dns nodns,inconsistent,noforward,good
 //      all
 // ADDR-OPTIONS: unqualified,route,quoted,noat,garbage,bad
 // *-OPTIONS are or'd together. 'bad' is all but 'quoted'.
@@ -29,14 +29,12 @@
 // information necessary for them to match is set.
 // First matching rule wins.
 //
-// phases: helo, mfrom, rto, data, message (DATA received)
+// phases: @helo, @from, @to, @data, @message (DATA received)
 //
 // QUESTION: what does or do? Eg:
 //	reject from info@fbi.gov to fred@barney or to joe@jim
 // ... rejects from: info@fbi.gov, to either fred or joe.
 //
-// TODO: some easier way to handle deferring helo rejections to either
-// after MAIL FROM non-<> or RCPT TO:
 package main
 
 import (
@@ -64,18 +62,14 @@ type Context struct {
 	// The set of rules used for this context.
 	ruleset []*Rule
 
-	// these store predetermined results for rules with meaningful
-	// phase markers. When we reach the given phase, we simply take
-	// the result instead of evaluating any further rules.
-	results [pMax]Action
-	rset [pMax]Phase // phase when a particular result was set.
-
-	// last phase we dealt with, to detect RSET situations and do
-	// something about them.
-	last Phase
+	// if we defer an action due to handling MAIL FROM:<>, this is
+	// the action
+	deferred Action
 
 	// A map of loaded files. Files are loaded as lists. An empty
 	// list means the file could not be loaded.
+	// This is used to avoid redundant reloading of files across
+	// multiple rules and for multiple checks for eg RCPT TO.
 	files map[string][]string
 
 	// we should tempfail for internal reasons, eg tempfail on file
@@ -89,6 +83,12 @@ type Context struct {
 	// it makes 'reject from /bad/people' and 'reject not to /good/ppl'
 	// work, at least.
 	rulemiss bool
+}
+
+func newContext(trans *smtpTransaction, rules []*Rule) *Context {
+	c := &Context{trans: trans, ruleset: rules}
+	c.files = make(map[string][]string)
+	return c
 }
 
 // This is currently a hack, as we load a map then turn it into a list
@@ -115,7 +115,6 @@ func (c *Context) getMatchList(a string) []string {
 
 //
 // Turn context information into Options
-// TODO: 'dns good' == not (dns nodns or dns nofwd or dns inconsist)
 func dnsGetter(c *Context) (o Option) {
 	if len(c.trans.rdns.verified) == 0 {
 		o |= oNodns
@@ -125,6 +124,12 @@ func dnsGetter(c *Context) (o Option) {
 	}
 	if len(c.trans.rdns.inconsist) > 0 {
 		o |= oInconsist
+	}
+	// We have good DNS if none of the above are true. This
+	// implies that we have at least one verified DNS result
+	// and none that are bad.
+	if o == oZero {
+		o = oGood
 	}
 	return
 }
@@ -248,46 +253,48 @@ func matchHost(host string, pat string) bool {
 // the event for the phase (we pull the command argument and the
 // command out of it).
 func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
-	// pending results?
-	if c.results[ph] != aError {
-		return c.results[ph]
-	}
-
 	// Set our shadow copies from what will become the real
 	// copies if we're successful.
+	// We also clear c.deferred in MAIL FROM or HELO to handle
+	// RSETs (or just people trying different MAIL FROMs).
 	switch ph {
 	case pHelo:
 		c.helocmd = evt.Cmd
 		c.heloname = evt.Arg
+		c.deferred = aError
 	case pMfrom:
 		c.from = evt.Arg
+		c.deferred = aError
 	case pRto:
 		c.rcptto = evt.Arg
 	}
 
-	// on a reset, we find everything deferred from our level and
-	// later and clear it, because it's no longer valid. repeated
-	// HELO or MAIL FROM are a sign of a reset, as is going
-	// backwards in phase.
-	// (if the rule is still going to match, well, we're about to
-	// re-evaluate it anyways.)
-	if c.last > ph || (c.last == ph && (ph == pHelo || ph == pMfrom)) {
-		for i := ph+1; i < pMax; i ++ {
-			if c.rset[i] >= ph {
-				c.rset[i] = pAny
-				c.results[i] = aError
-			}
-		}
-	}
-	c.last = ph
+	var ret Action
+	ret = aNoresult
 
 	for _, r := range c.ruleset {
-		// either this rule has already done everything it can or
-		// we can't do it yet.
-		// A pAny rule, ie one that has no specific prereqs, does
-		// not need to fire above pHelo.
+		// Try to determine if we can run this rule.
 		rp := r.requires
-		if (rp != pAny && rp != ph) || (rp == pAny && ph > pHelo) {
+		rr := r.result
+		switch {
+		case rp > ph:
+			// the rule's basic requirements mean we can't
+			// satisfy it yet. skip.
+			continue
+		case r.deferto != pAny && r.deferto > ph:
+			// we could satisfy the rule's requirements but it
+			// wants to be deferred until later. skip.
+			continue
+		case rr <= aAccept:
+			// Accept rules must always be checked because
+			// they don't block us from continuing.
+			// (so we do 'pass' here)
+
+		case (rp == pAny && ph > pHelo) || (rp != pAny && rp > ph):
+			// We can skip aReject and aStall rules if they
+			// require a phase before this one, because if
+			// they matched they would have blocked us from
+			// reaching here.
 			continue
 		}
 
@@ -296,25 +303,30 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 		if c.rulemiss {
 			continue
 		}
-		if !res {
-			continue
-		}
-
-		// semantics: if you defer an action, we keep looking for
-		// more actions now. (assuming that this deferral is
-		// meaningful)
-		// note that pAny < ph, so this check subsumes
-		// r.deferto != pAny.
-		if r.deferto > ph {
-			// if you aren't the first person here, you
-			// don't get to overwrite them.
-			if c.results[r.deferto] == aError {
-				c.results[r.deferto] = r.result
-				c.rset[r.deferto] = ph
-			}
-		} else {
-			return r.result
+		if res {
+			ret = r.result
+			break
 		}
 	}
-	return aNoresult
+
+	// Handle deferred results due to MAIL FROM:<>.
+	// We only switch to the deferred result if it is more strict
+	// than the result we've determined now.
+	// We don't clear c.deferred because this result is now sticky;
+	// it must apply to all RCPT TOs from now on. If the connection
+	// is RSET, the result will be cleared in our initial section.
+	// Implicity ph >= pRto, really ph == pRto, because we only set
+	// c.deferred in pMfrom.
+	if c.deferred > ret {
+		ret = c.deferred
+	}
+
+	// Do we need to defer our result in order to accept a
+	// MAIL FROM:<>?
+	if ph == pMfrom && c.from == "" && ret > aAccept {
+		c.deferred = ret
+		ret = aAccept
+	}
+
+	return ret
 }

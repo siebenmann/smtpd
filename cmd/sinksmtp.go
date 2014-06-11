@@ -631,10 +631,13 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 	toacpt := loadList(toaccept)
 	helorej := loadList(heloreject)
 
+	// TODO: set permanent tempfail if rulesfile is set and the
+	// rules do not load?
+	// That's for when we go heavily into rules, of course.
 	var c *Context
 	rules := loadRules(rulesfile)
 	if rules != nil && len(rules) > 0 {
-		c = &Context{trans: trans, ruleset: rules}
+		c = newContext(trans, rules)
 	}
 
 	if smtplog != nil {

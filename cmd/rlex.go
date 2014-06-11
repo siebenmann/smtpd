@@ -69,11 +69,11 @@ const (
 
 	// All of the sorts of keywords:
 	// phases
-	itemHelo
-	itemMfrom
-	itemRto
-	itemData
-	itemMessage
+	itemAHelo
+	itemAFrom
+	itemATo
+	itemAData
+	itemAMessage
 
 	// core operations
 	itemAccept
@@ -84,7 +84,8 @@ const (
 	itemOr
 	itemNot
 
-	// rule keywords not already mentioned, eg itemHelo
+	// rule keywords not already mentioned
+	itemHeloAs
 	itemAll
 	itemFrom
 	itemTo
@@ -96,6 +97,7 @@ const (
 	itemDns
 
 	// options that do not duplicate keywords
+	itemHelo
 	itemEhlo
 	itemNone
 	itemNodots
@@ -111,6 +113,7 @@ const (
 	itemBad
 	itemOn
 	itemOff
+	itemGood
 
 	// highest keyword, well, one larger than it.
 	itemMaxItem
@@ -120,11 +123,11 @@ const (
 
 var keywords = map[string]itemType{
 	// phases
-	"helo":     itemHelo,
-	"mailfrom": itemMfrom,
-	"rcptto":   itemRto,
-	"data":     itemData,
-	"message":  itemMessage,
+	"@helo":    itemAHelo,
+	"@from":    itemAFrom,
+	"@to":      itemATo,
+	"@data":    itemAData,
+	"@message": itemAMessage,
 	// actions
 	"accept": itemAccept,
 	"reject": itemReject,
@@ -133,16 +136,18 @@ var keywords = map[string]itemType{
 	"or":  itemOr,
 	"not": itemNot,
 	// rule operations
-	"all":      itemAll,
-	"from":     itemFrom,
-	"to":       itemTo,
-	"from-has": itemFromHas,
-	"to-has":   itemToHas,
-	"greeted":  itemGreeted,
-	"tls":      itemTls,
-	"host":     itemHost,
-	"dns":      itemDns,
+	"helo-as":   itemHeloAs,
+	"all":       itemAll,
+	"from":      itemFrom,
+	"to":        itemTo,
+	"from-has":  itemFromHas,
+	"to-has":    itemToHas,
+	"helo-with": itemGreeted,
+	"tls":       itemTls,
+	"host":      itemHost,
+	"dns":       itemDns,
 	// options
+	"helo":         itemHelo,
 	"ehlo":         itemEhlo,
 	"none":         itemNone,
 	"nodots":       itemNodots,
@@ -158,6 +163,7 @@ var keywords = map[string]itemType{
 	"bad":          itemBad,
 	"on":           itemOn,
 	"off":          itemOff,
+	"good":         itemGood,
 }
 
 const eof = -1
