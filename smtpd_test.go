@@ -260,13 +260,10 @@ MAIL FROM:<a@b.com>
 DATA
 Subject: yadda yadda
 RSET
-MAIL FROM:<abc>
-MAIL FROM:<abc@def">
-MAIL FROM:<abc@def]>
-MAIL FROM:<abc@def>
 MAIL FROM:<abc@def.ghi>
 RCPT TO:<>
 RCPT TO:<abc@def>
+RCPT TO:<abc@ghi> SIZE=9999
 `
 var sequenceServer = `220 localhost go-smtpd
 503 Out of sequence command
@@ -281,13 +278,10 @@ var sequenceServer = `220 localhost go-smtpd
 503 Out of sequence command
 501 Bad: unrecognized command
 250 Okay
-550 Bad address
-550 Bad address
-550 Bad address
-550 Bad address
 250 Okay, I'll believe you for now
 550 Bad address
-550 Bad address
+250 Okay, I'll believe you for now
+504 Command parameter not implemented
 `
 
 // Test the stream of events emitted from Next(), as opposed to the output

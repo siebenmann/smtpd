@@ -555,34 +555,6 @@ func (c *Conn) Tempfail() {
 	c.replied = true
 }
 
-// Basic syntax checks on the address. We could do more to verify that
-// the domain looks sensible but ehh, this is good enough for now.
-// Basically we want things that look like 'a@b.c': must have an @,
-// must not end with various bad characters, must have a '.' after
-// the @.
-// TODO: should we defer some or all of this to the caller?
-// BUG: Given IPv6 address literals we are probably technically incorrect
-// to require a '.' after the @.
-func addr_valid(a string) bool {
-	// caller must reject null address if appropriate.
-	if a == "" {
-		return true
-	}
-	lp := len(a) - 1
-	if a[lp] == '"' || a[lp] == ']' || a[lp] == '.' {
-		return false
-	}
-	idx := strings.IndexByte(a, '@')
-	if idx == -1 || idx == lp {
-		return false
-	}
-	id2 := strings.IndexByte(a[idx+1:], '.')
-	if id2 == -1 {
-		return false
-	}
-	return true
-}
-
 // Return the next high-level event from the SMTP connection.
 //
 // Next() guarantees that the SMTP protocol ordering requirements are
@@ -749,18 +721,12 @@ func (c *Conn) Next() EventInfo {
 		c.nstate = t.next
 		c.replied = false
 		c.curcmd = res.Cmd
-		// Do initial checks on commands.
-		switch res.Cmd {
-		case MAILFROM:
-			if !addr_valid(res.Arg) {
-				c.Reject()
-				continue
-			}
-		case RCPTTO:
-			if len(res.Arg) == 0 || !addr_valid(res.Arg) {
-				c.Reject()
-				continue
-			}
+
+		// RCPT TO:<> is invalid; reject it. Otherwise defer all
+		// address checking to our callers.
+		if res.Cmd == RCPTTO && len(res.Arg) == 0 {
+			c.Reject()
+			continue
 		}
 		// reject parameters that we don't accept, which right
 		// now is all of them. We reject with the RFC-correct
