@@ -280,6 +280,28 @@ func inAddrList(addr string, alist addrList, def bool) bool {
 }
 
 // ----
+func loadRules(fname string) []*Rule {
+	if fname == "" {
+		return nil
+	}
+	fp, err := os.Open(fname)
+	if err != nil {
+		return nil
+	}
+	defer fp.Close()
+	b, err := ioutil.ReadAll(fp)
+	if err != nil {
+		return nil
+	}
+	rl, e := Parse(string(b))
+	if e != nil {
+		warnf("rules parsing error %s\n", *e)
+		return nil
+	}
+	return rl
+}
+
+// ----
 
 // This is a blacklist of IPs that have TLS problems when talking to
 // us. If an IP is present and is more recent than tlsTimeout (3 days),
@@ -563,6 +585,29 @@ func isGoodAddress(addr string) bool {
 	return true
 }
 
+func gronk(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id string) bool {
+	if c == nil {
+		return false
+	}
+	res := Decide(ph, evt, c)
+	if res == aNoresult || res == aAccept {
+		return false
+	}
+	switch res {
+	case aReject:
+		if id != "" && ph == pMessage {
+			convo.RejectData(id)
+		} else {
+			convo.Reject()
+		}
+	case aStall:
+		convo.Tempfail()
+	default:
+		panic("impossible res")
+	}
+	return true
+}
+
 // Process a single connection.
 // We take tlsc as a value instead of a literal because we are going to
 // change it (to set tlsc.ServerName). This causes 'go vet' to complain
@@ -585,6 +630,12 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 	fromrej := loadList(fromreject)
 	toacpt := loadList(toaccept)
 	helorej := loadList(heloreject)
+
+	var c *Context
+	rules := loadRules(rulesfile)
+	if rules != nil && len(rules) > 0 {
+		c = &Context{trans: trans, ruleset: rules}
+	}
 
 	if smtplog != nil {
 		logger := &smtpLogger{}
@@ -646,6 +697,9 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 				if inHostList(evt.Arg, helorej) {
 					poisoned = true
 				}
+				if gronk(pHelo, evt, c, convo, "") {
+					continue
+				}
 				trans.heloname = evt.Arg
 				trans.from = ""
 				trans.data = ""
@@ -668,6 +722,10 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 				// choke.
 				if evt.Arg != "" && poisoned {
 					convo.Reject()
+					continue
+				}
+				if gronk(pMfrom, evt, c, convo, "") {
+					continue
 				}
 				trans.from = evt.Arg
 				trans.data = ""
@@ -681,11 +739,15 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 					convo.Reject()
 					continue
 				}
+				if gronk(pRto, evt, c, convo, "") {
+					continue
+				}
 				trans.rcptto = append(trans.rcptto, evt.Arg)
 			case smtpd.DATA:
 				if faildata {
 					convo.Reject()
 				}
+				gronk(pData, evt, c, convo, "")
 			}
 		case smtpd.GOTDATA:
 			// message rejection is deferred until after logging
@@ -699,14 +761,15 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 			// errors when handling a message always force
 			// a tempfail regardless of how we're
 			// configured.
-			if err != nil {
+			switch {
+			case err != nil:
 				convo.Tempfail()
-			} else {
-				if failgotdata {
-					convo.RejectData(transid)
-				} else {
-					convo.AcceptData(transid)
-				}
+			case failgotdata:
+				convo.RejectData(transid)
+			case gronk(pMessage, evt, c, convo, transid):
+				// do nothing, already gronkd
+			default:
+				convo.AcceptData(transid)
 			}
 		case smtpd.TLSERROR:
 			ipAdd(trans.rip)
@@ -743,6 +806,7 @@ var dothelo bool
 var fromreject string
 var toaccept string
 var heloreject string
+var rulesfile string
 
 func openlogfile(fname string) (outf io.Writer, err error) {
 	if fname == "" {
@@ -779,6 +843,7 @@ func main() {
 	flag.StringVar(&fromreject, "fromreject", "", "if set, filename of address patterns to reject in MAIL FROMs")
 	flag.StringVar(&toaccept, "toaccept", "", "if set, filename of address patterns to accept in RCPT TOs (all others will be rejected if there are any entries in the file)")
 	flag.StringVar(&heloreject, "heloreject", "", "if set, filename of address patterns to reject in EHLO/HELO names")
+	flag.StringVar(&rulesfile, "r", "", "if set, filename of a set of control rules")
 
 	flag.Parse()
 	if flag.NArg() == 0 {

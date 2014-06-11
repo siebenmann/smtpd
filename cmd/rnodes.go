@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -16,6 +17,8 @@ const (
 	pRto
 	pData
 	pMessage
+
+	pMax
 )
 
 var pMap = map[Phase]string{
@@ -31,6 +34,7 @@ type Action int
 
 const (
 	aError Action = iota
+	aNoresult
 	aAccept
 	aReject
 	aStall
@@ -38,11 +42,38 @@ const (
 
 var aMap = map[Action]string{
 	aError: "ERROR", aAccept: "accept", aReject: "reject", aStall: "stall",
+	aNoresult: "no result",
 }
 
 func (a Action) String() string {
 	return aMap[a]
 }
+
+type Option uint64
+
+const (
+	oZero Option = iota
+
+	// EHLO/HELO options
+	oHelo Option = 1 << iota
+	oEhlo
+	oNone
+	oNodots
+	oBareip
+
+	// DNS options
+	oNodns
+	oInconsist
+	oNofwd
+
+	// address options
+	oUnqualified
+	oRoute
+	oQuoted
+	oNoat
+	oGarbage
+	oBad = oUnqualified | oRoute | oNoat | oGarbage
+)
 
 type Result bool
 
@@ -66,52 +97,49 @@ func (r *Rule) String() string {
 	}
 }
 
+// Expr is an expression node, aka an AST node.
 type Expr interface {
-	Eval(ti *TransInfo) (Result, error)
+	Eval(c *Context) Result
 	String() string
 }
 
-type TransInfo struct {
-	// to come
-}
-
 // Structural nodes
+
+// normal running 'thing1 thing2 ...'
 type AndL struct {
 	nodes []Expr
 }
 
-func (a *AndL) Eval(ti *TransInfo) (r Result, e error) {
-	for i, _ := range a.nodes {
-		r, e = a.nodes[i].Eval(ti)
-		if e != nil || !r {
-			return r, e
+func (a *AndL) Eval(c *Context) (r Result) {
+	for i := range a.nodes {
+		r = a.nodes[i].Eval(c)
+		if !r {
+			return r
 		}
 	}
-	return true, nil
+	return true
 }
 func (a *AndL) String() string {
 	var l []string
-	for i, _ := range a.nodes {
+	for i := range a.nodes {
 		l = append(l, a.nodes[i].String())
 	}
 	return fmt.Sprintf("( %s )", strings.Join(l, " "))
 }
 
+// not <thing>
 type NotN struct {
 	node Expr
 }
 
-func (n *NotN) Eval(ti *TransInfo) (r Result, e error) {
-	r, e = n.node.Eval(ti)
-	if e != nil {
-		return r, e
-	}
-	return !r, e
+func (n *NotN) Eval(c *Context) (r Result) {
+	return !n.node.Eval(c)
 }
 func (n *NotN) String() string {
 	return "not " + n.node.String()
 }
 
+// thing1 or thing2
 type OrN struct {
 	left, right Expr
 }
@@ -119,12 +147,12 @@ type OrN struct {
 func (o *OrN) String() string {
 	return fmt.Sprintf("( %s or %s )", o.left.String(), o.right.String())
 }
-func (o *OrN) Eval(ti *TransInfo) (r Result, e error) {
-	r, e = o.left.Eval(ti)
-	if e != nil || r {
-		return r, e
+func (o *OrN) Eval(c *Context) (r Result) {
+	r = o.left.Eval(c)
+	if r {
+		return r
 	}
-	return o.right.Eval(ti)
+	return o.right.Eval(c)
 }
 
 //
@@ -132,15 +160,176 @@ func (o *OrN) Eval(ti *TransInfo) (r Result, e error) {
 // Terminal nodes that match things.
 //
 
-// TEMPORARY HACK
-type TempN struct {
-	what string
-	arg  string
+// All always matches.
+type AllN struct{}
+
+func (a *AllN) String() string {
+	return "all"
+}
+func (a *AllN) Eval(c *Context) (r Result) {
+	return true
 }
 
-func (t *TempN) String() string {
-	return fmt.Sprintf("%s %s", t.what, t.arg)
+// True if TLS is on.
+type TlsN struct {
+	on bool
 }
-func (t *TempN) Eval(ti *TransInfo) (r Result, err error) {
-	return true, nil
+
+func (t *TlsN) String() string {
+	if t.on {
+		return "tls on"
+	} else {
+		return "tls off"
+	}
+}
+func (t *TlsN) Eval(c *Context) (r Result) {
+	return t.on == c.trans.tlson
+}
+
+//
+// from/to/helo/host matchers. All of these have a common pattern:
+// they take an argument that may be a filename and they do either
+// address or host matching. host and to iterate over the valid
+// hostnames and rcptto address respectively, helo/from just look
+// at the EHLO name or the MAIL FROM. We handle all of these with
+// one core object.
+// OUT OF DATE, rcptto matching is singleton now.
+
+type MatchN struct {
+	what, arg string
+	// match a literal against a pattern. Either matchHost or matchAddress
+	matcher func(string, string) bool
+	// get an array of strings of literals to match against.
+	// from and helo have one-element arrays.
+	getter func(*Context) []string
+}
+
+func (m *MatchN) String() string {
+	return fmt.Sprintf("%s %s", m.what, m.arg)
+}
+
+// on an empty list, the entire rule should miss.
+// TODO: not sure!
+func (m *MatchN) Eval(c *Context) Result {
+	plist := c.getMatchList(m.arg)
+	if len(plist) == 0 {
+		c.rulemiss = true
+		return false
+		// we might as well return here, we're not matching.
+	}
+	for _, p := range plist {
+		for _, e := range m.getter(c) {
+			if m.matcher(e, p) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func newHeloNode(arg string) Expr {
+	return &MatchN{what: "helo", arg: arg, matcher: matchHost,
+		getter: func(c *Context) []string {
+			return []string{c.heloname}
+		},
+	}
+}
+
+func newHostNode(arg string) Expr {
+	return &MatchN{what: "host", arg: arg, matcher: matchHost,
+		getter: func(c *Context) []string {
+			return c.trans.rdns.verified
+		},
+	}
+}
+
+func newFromNode(arg string) Expr {
+	return &MatchN{what: "from", arg: arg, matcher: matchAddress,
+		getter: func(c *Context) []string {
+			return []string{c.from}
+		},
+	}
+}
+
+func newToNode(arg string) Expr {
+	return &MatchN{what: "to", arg: arg, matcher: matchAddress,
+		getter: func(c *Context) []string {
+			return []string{c.rcptto}
+		},
+	}
+}
+
+// ------
+//
+// Options have getter functions that interrogate the context to determine
+// what is the case. Those live in rules.go.
+type OptionN struct {
+	what   string
+	opts   Option
+	getter func(*Context) Option
+}
+
+func (t *OptionN) Eval(c *Context) (r Result) {
+	opt := t.getter(c)
+	return t.opts&opt > 0
+}
+func (t *OptionN) String() string {
+	var l []string
+	opts := t.opts
+	if (opts & oBad) == oBad {
+		l = append(l, "bad")
+		opts = opts - oBad
+	}
+	for k, v := range revMap {
+		if (k & opts) == k {
+			l = append(l, v)
+		}
+	}
+	// remember, Go map traversal order is deliberately unpredictable
+	// we have to make it predictable to have something we can round
+	// trip.
+	sort.Strings(l)
+	return fmt.Sprintf("%s %s", t.what, strings.Join(l, ","))
+}
+
+// GORY HACK. Construct inverse opts mapping through magic knowledge
+// of both the lexer and the parser. We're all very friendly here,
+// right?
+func optsReverse() map[Option]string {
+	rev := make(map[Option]string)
+	revi := make(map[itemType]string)
+	for s, i := range keywords {
+		revi[i] = s
+	}
+	for _, m := range mapMap {
+		for k, v := range m {
+			rev[v] = revi[k]
+		}
+	}
+	return rev
+}
+
+var revMap = optsReverse()
+
+// -- create them.
+func newDnsOpt(o Option) Expr {
+	return &OptionN{what: "dns", opts: o, getter: dnsGetter}
+}
+
+func newHeloOpt(o Option) Expr {
+	return &OptionN{what: "greeted", opts: o, getter: heloGetter}
+}
+
+func getFromOpts(c *Context) Option {
+	return getAddrOpts(c.from)
+}
+func newFromHasOpt(o Option) Expr {
+	return &OptionN{what: "from-has", opts: o, getter: getFromOpts}
+}
+
+func getToOpts(c *Context) Option {
+	return getAddrOpts(c.rcptto)
+}
+func newToHasOpt(o Option) Expr {
+	return &OptionN{what: "to-has", opts: o, getter: getToOpts}
 }

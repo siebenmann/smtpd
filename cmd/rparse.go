@@ -13,8 +13,7 @@ import (
 // grammar:
 // a squence of rules
 //
-// rule  -> phase what orl EOL|EOF
-//          what andl EOL|EOF
+// rule  -> [phase] [toall] what orl EOL|EOF
 // phase -> HELO | MFROM | RTO | DATA | MESSAGE
 // what  -> ACCEPT | REJECT | STALL
 // andl  -> orl [andl]
@@ -26,8 +25,10 @@ import (
 //          GREETED GREETED-OPT[,GREETED-OPT]
 //          FROM-HAS|TO-HAS ADDR-OPT[,ADDR-OPT]
 //          FROM|TO|HELO|HOST arg
+//          ALL
 // arg   -> VALUE
 //          FILENAME
+// arg actually is 'anything', keywords become values in it.
 
 type Parser struct {
 	l      *lexer
@@ -98,13 +99,26 @@ func (p *Parser) pParen() (expr Expr, err *string) {
 	return er, err
 }
 
-func (p *Parser) pArg(t *TempN) (good bool, err *string) {
+func (p *Parser) pArg() (arg string, err *string) {
 	if p.curtok.typ < itemHasValue {
-		return false, nil
+		return "", p.genError("expected argument")
 	}
-	t.arg = p.curtok.val
+	arg = p.curtok.val
 	p.consume()
-	return true, nil
+	return
+}
+
+func (p *Parser) pOnOff() (on bool, err *string) {
+	switch p.curtok.typ {
+	case itemOn:
+		p.consume()
+		return true, nil
+	case itemOff:
+		p.consume()
+		return false, nil
+	default:
+		return false, p.genError("expected on or off")
+	}
 }
 
 // Minimum phase requirements for various things that cannot be evaluated
@@ -118,29 +132,102 @@ var minReq = map[itemType]Phase{
 	itemTls: pMfrom,
 }
 
+var heloMap = map[itemType]Option{
+	itemHelo: oHelo, itemEhlo: oEhlo, itemNone: oNone, itemNodots: oNodots,
+	itemBareip: oBareip,
+}
+var dnsMap = map[itemType]Option{
+	itemNodns: oNodns, itemInconsistent: oInconsist, itemNoforward: oNofwd,
+}
+var addrMap = map[itemType]Option{
+	itemUnqualified: oUnqualified, itemRoute: oRoute, itemQuoted: oQuoted,
+	itemNoat: oNoat, itemGarbage: oGarbage, itemBad: oBad,
+}
+var mapMap = map[itemType]map[itemType]Option{
+	itemFromHas: addrMap, itemToHas: addrMap,
+	itemGreeted: heloMap,
+	itemDns:     dnsMap,
+}
+
+func (p *Parser) pCommaOpts(m map[itemType]Option) (opt Option, err *string) {
+	for {
+		ct := p.curtok.typ
+		if m[ct] == oZero {
+			return oZero, p.genError("expected valid option")
+		}
+		opt |= m[ct]
+		p.consume()
+		if p.curtok.typ == itemComma {
+			p.consume()
+		} else {
+			break
+		}
+	}
+	return opt, nil
+}
+
 func (p *Parser) pTerm() (expr Expr, err *string) {
 	ct := p.curtok.typ
+	if ct == itemNot {
+		return p.pNot()
+	}
+	if ct == itemLparen {
+		return p.pParen()
+	}
+
+	// set phase requirement, if any.
 	if minReq[ct] != pAny && minReq[ct] > p.currule.requires {
 		p.currule.requires = minReq[ct]
 	}
-	switch p.curtok.typ {
-	case itemNot:
-		return p.pNot()
-	case itemLparen:
-		return p.pParen()
+
+	// get argument
+	var arg string
+	var ison bool
+	var opts Option
+	switch ct {
 	case itemFrom, itemTo, itemHelo, itemHost:
-		t := &TempN{what: p.curtok.val}
 		p.consume()
-		good, err := p.pArg(t)
-		if err != nil {
-			return nil, err
-		}
-		if !good {
-			return nil, p.genError("expected argument")
-		}
-		return t, err
+		arg, err = p.pArg()
+	case itemTls:
+		p.consume()
+		ison, err = p.pOnOff()
+	case itemAll:
+		p.consume()
+		return &AllN{}, nil
+	case itemFromHas, itemToHas, itemDns, itemGreeted:
+		p.consume()
+		opts, err = p.pCommaOpts(mapMap[ct])
 	default:
+		// Since we are bottoming out on the parsing stack,
+		// we need to start shuttling unrecognized things
+		// back up it here.
 		return nil, nil
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	switch ct {
+	case itemFrom:
+		return newFromNode(arg), nil
+	case itemTo:
+		return newToNode(arg), nil
+	case itemHelo:
+		return newHeloNode(arg), nil
+	case itemHost:
+		return newHostNode(arg), nil
+	case itemFromHas:
+		return newFromHasOpt(opts), nil
+	case itemToHas:
+		return newToHasOpt(opts), nil
+	case itemDns:
+		return newDnsOpt(opts), nil
+	case itemGreeted:
+		return newHeloOpt(opts), nil
+	case itemTls:
+		return &TlsN{on: ison}, nil
+	default:
+		panic("should be impossible")
 	}
 }
 
@@ -235,6 +322,10 @@ func (p *Parser) pRule() (r *Rule, err *string) {
 	}
 	if p.isEol() {
 		p.consume()
+		if p.currule.deferto != pAny &&
+			p.currule.deferto < p.currule.requires {
+			return nil, p.genError("rule specifies a phase lower than its operations require, does not make sense")
+		}
 		return p.currule, err
 	} else {
 		return nil, p.genError("expecting end of line")

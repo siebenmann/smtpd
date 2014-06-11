@@ -85,6 +85,7 @@ const (
 	itemNot
 
 	// rule keywords not already mentioned, eg itemHelo
+	itemAll
 	itemFrom
 	itemTo
 	itemFromHas
@@ -132,6 +133,7 @@ var keywords = map[string]itemType{
 	"or":  itemOr,
 	"not": itemNot,
 	// rule operations
+	"all":      itemAll,
 	"from":     itemFrom,
 	"to":       itemTo,
 	"from-has": itemFromHas,
