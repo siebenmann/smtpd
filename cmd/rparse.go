@@ -326,6 +326,10 @@ func (p *Parser) pRule() (r *Rule, err *string) {
 			p.currule.deferto < p.currule.requires {
 			return nil, p.genError("rule specifies a phase lower than its operations require, does not make sense")
 		}
+		// remove trivial root of 'defer to now'.
+		if p.currule.deferto == p.currule.requires {
+			p.currule.deferto = pAny
+		}
 		return p.currule, err
 	} else {
 		return nil, p.genError("expecting end of line")

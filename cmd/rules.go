@@ -63,14 +63,15 @@ type Context struct {
 
 	// The set of rules used for this context.
 	ruleset []*Rule
+
 	// these store predetermined results for rules with meaningful
 	// phase markers. When we reach the given phase, we simply take
 	// the result instead of evaluating any further rules.
 	results [pMax]Action
+	rset [pMax]Phase // phase when a particular result was set.
+
 	// last phase we dealt with, to detect RSET situations and do
 	// something about them.
-	// TODO: figure out what to do about RSETs, repeated HELO/EHLO,
-	// etc.
 	last Phase
 
 	// A map of loaded files. Files are loaded as lists. An empty
@@ -114,6 +115,7 @@ func (c *Context) getMatchList(a string) []string {
 
 //
 // Turn context information into Options
+// TODO: 'dns good' == not (dns nodns or dns nofwd or dns inconsist)
 func dnsGetter(c *Context) (o Option) {
 	if len(c.trans.rdns.verified) == 0 {
 		o |= oNodns
@@ -224,6 +226,7 @@ func matchAddress(addr string, pat string) bool {
 	return ts == pat
 }
 
+// match a hostname against a hostname pattern
 func matchHost(host string, pat string) bool {
 	host = strings.ToLower(host)
 	if host == pat || "."+host == pat {
@@ -238,6 +241,8 @@ func matchHost(host string, pat string) bool {
 	return false
 }
 
+// ----
+
 //
 // Decide what to do in a given phase in a context, with evt being
 // the event for the phase (we pull the command argument and the
@@ -248,7 +253,8 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 		return c.results[ph]
 	}
 
-	// initial setup.
+	// Set our shadow copies from what will become the real
+	// copies if we're successful.
 	switch ph {
 	case pHelo:
 		c.helocmd = evt.Cmd
@@ -259,7 +265,22 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 		c.rcptto = evt.Arg
 	}
 
+	// on a reset, we find everything deferred from our level and
+	// later and clear it, because it's no longer valid. repeated
+	// HELO or MAIL FROM are a sign of a reset, as is going
+	// backwards in phase.
+	// (if the rule is still going to match, well, we're about to
+	// re-evaluate it anyways.)
+	if c.last > ph || (c.last == ph && (ph == pHelo || ph == pMfrom)) {
+		for i := ph+1; i < pMax; i ++ {
+			if c.rset[i] >= ph {
+				c.rset[i] = pAny
+				c.results[i] = aError
+			}
+		}
+	}
 	c.last = ph
+
 	for _, r := range c.ruleset {
 		// either this rule has already done everything it can or
 		// we can't do it yet.
@@ -280,9 +301,17 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 		}
 
 		// semantics: if you defer an action, we keep looking for
-		// more actions now.
-		if r.deferto != pAny {
-			c.results[r.deferto] = r.result
+		// more actions now. (assuming that this deferral is
+		// meaningful)
+		// note that pAny < ph, so this check subsumes
+		// r.deferto != pAny.
+		if r.deferto > ph {
+			// if you aren't the first person here, you
+			// don't get to overwrite them.
+			if c.results[r.deferto] == aError {
+				c.results[r.deferto] = r.result
+				c.rset[r.deferto] = ph
+			}
 		} else {
 			return r.result
 		}
