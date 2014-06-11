@@ -3,3 +3,6 @@ sinksmtp: cmd/sinksmtp.go cmd/tlsnames.go smtpd.go cmd/rdns.go cmd/rlex.go cmd/r
 
 clean:
 	rm -f sinksmtp
+
+test:
+	go test && cd cmd && go test
