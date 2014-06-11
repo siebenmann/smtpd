@@ -12,6 +12,9 @@ package main
 
 // openssl ciphers -V | sort | field 1 3 4 7 | sed -e 's/,0x//' -e 's/Enc=.*(//' -e 's/)$//' | awk '{printf "%s: %s\n", $1, $3 ":" $2 ":" $4}' | sed -e 's/ / "/' -e 's/$/",/'
 var cipherNames = map[uint16]string{
+	// this will report something for uninitialized cipher values.
+	0x0000: "NULL-CIPHER-ERROR",
+
 	0x0004: "SSLv3:RC4-MD5:128",
 	0x0005: "SSLv3:RC4-SHA:128",
 	0x0007: "SSLv3:IDEA-CBC-SHA:128",
