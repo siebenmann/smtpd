@@ -85,19 +85,18 @@ const (
 	itemNot
 
 	// rule keywords not already mentioned
-	itemHeloAs
+	itemHelo
 	itemAll
 	itemFrom
 	itemTo
 	itemFromHas
 	itemToHas
-	itemGreeted
+	itemHeloHas
 	itemTls
 	itemHost
 	itemDns
 
 	// options that do not duplicate keywords
-	itemHelo
 	itemEhlo
 	itemNone
 	itemNodots
@@ -136,18 +135,17 @@ var keywords = map[string]itemType{
 	"or":  itemOr,
 	"not": itemNot,
 	// rule operations
-	"helo-as":   itemHeloAs,
-	"all":       itemAll,
-	"from":      itemFrom,
-	"to":        itemTo,
-	"from-has":  itemFromHas,
-	"to-has":    itemToHas,
-	"helo-with": itemGreeted,
-	"tls":       itemTls,
-	"host":      itemHost,
-	"dns":       itemDns,
+	"all":      itemAll,
+	"from":     itemFrom,
+	"to":       itemTo,
+	"helo":     itemHelo,
+	"host":     itemHost,
+	"from-has": itemFromHas,
+	"to-has":   itemToHas,
+	"helo-has": itemHeloHas,
+	"tls":      itemTls,
+	"dns":      itemDns,
 	// options
-	"helo":         itemHelo,
 	"ehlo":         itemEhlo,
 	"none":         itemNone,
 	"nodots":       itemNodots,
@@ -330,7 +328,7 @@ func lexWord(l *lexer) stateFn {
 	switch {
 	case keywords[v] != itemError:
 		l.emit(keywords[v])
-	case v[0] == '/':
+	case v[0] == '/' || strings.HasPrefix(v, "./") || strings.HasPrefix(v, "file"):
 		l.emit(itemFilename)
 	default:
 		l.emit(itemValue)

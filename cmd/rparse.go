@@ -22,7 +22,7 @@ import (
 //          ( andl )
 //          TLS ON|OFF
 //          DNS DNS-OPT[,DNS-OPT]
-//          GREETED GREETED-OPT[,GREETED-OPT]
+//          HELO-HAS HELO-OPT[,HELO-OPT]
 //          FROM-HAS|TO-HAS ADDR-OPT[,ADDR-OPT]
 //          FROM|TO|HELO|HOST arg
 //          ALL
@@ -124,8 +124,8 @@ func (p *Parser) pOnOff() (on bool, err *string) {
 // Minimum phase requirements for various things that cannot be evaluated
 // at any time.
 var minReq = map[itemType]Phase{
-	itemFrom: pMfrom, itemHeloAs: pHelo, itemTo: pRto,
-	itemFromHas: pMfrom, itemToHas: pRto, itemGreeted: pHelo,
+	itemFrom: pMfrom, itemHelo: pHelo, itemTo: pRto,
+	itemFromHas: pMfrom, itemToHas: pRto, itemHeloHas: pHelo,
 	// We can't be sure that TLS is set up until we've seen a
 	// MAIL FROM, because the first HELO/EHLO will be without
 	// TLS and then they will STARTTLS again.
@@ -146,7 +146,7 @@ var addrMap = map[itemType]Option{
 }
 var mapMap = map[itemType]map[itemType]Option{
 	itemFromHas: addrMap, itemToHas: addrMap,
-	itemGreeted: heloMap,
+	itemHeloHas: heloMap,
 	itemDns:     dnsMap,
 }
 
@@ -195,7 +195,7 @@ func (p *Parser) pTerm() (expr Expr, err *string) {
 	case itemAll:
 		p.consume()
 		return &AllN{}, nil
-	case itemFromHas, itemToHas, itemDns, itemGreeted:
+	case itemFromHas, itemToHas, itemDns, itemHeloHas:
 		p.consume()
 		opts, err = p.pCommaOpts(mapMap[ct])
 	default:
@@ -223,7 +223,7 @@ func (p *Parser) pTerm() (expr Expr, err *string) {
 		return newToHasOpt(opts), nil
 	case itemDns:
 		return newDnsOpt(opts), nil
-	case itemGreeted:
+	case itemHeloHas:
 		return newHeloOpt(opts), nil
 	case itemTls:
 		return &TlsN{on: ison}, nil

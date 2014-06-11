@@ -73,6 +73,17 @@
 // with no leading dots matches that name; a name with a starting '.'
 // matches that name or any subdomains of it.
 //
+// -r FILE: use FILE as a rules file. Discussion of rules are beyond
+//          the scope of this already-too-long documentation.
+//          Explicitly set command line options take priority over
+//          rules.
+// -allow-empty-rules: if the rules file fails to load or is empty,
+//          sinksmtp normally 4xx's all commands. This allows it to
+//          proceeed as normal.
+//
+// (Internally, all of the command line options themselves create
+// rules and these rules are evaluated before any in your -r file.)
+//
 // LOG ENTRIES AND SAVE FILES:
 // The format of this information is hopefully obvious.
 // In save files, everything up to and including the 'body' line is
@@ -135,6 +146,7 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/siebenmann/smtpd"
@@ -161,11 +173,11 @@ func die(format string, elems ...interface{}) {
 }
 
 // ----
-// Address lists and address list lookup.
-type addrList map[string]bool
-
-func readList(rdr *bufio.Reader) (addrList, error) {
-	var a = make(addrList)
+// Read address lists in. This is done here because we call warnf()
+// under some circumstances.
+// TODO: fix that.
+func readList(rdr *bufio.Reader) ([]string, error) {
+	var a []string
 	for {
 		line, err := rdr.ReadString('\n')
 		if err != nil {
@@ -181,12 +193,12 @@ func readList(rdr *bufio.Reader) (addrList, error) {
 		}
 
 		line = strings.ToLower(line)
-		a[line] = true
+		a = append(a, line)
 	}
 	// Cannot be reached; for loop has no breaks.
 }
 
-func loadList(fname string) addrList {
+func loadList(fname string) []string {
 	if fname == "" {
 		return nil
 	}
@@ -195,6 +207,8 @@ func loadList(fname string) addrList {
 		// An address list that is missing entirely is not an
 		// error that we bother reporting. We only report IO
 		// errors reading the thing.
+		// TODO: this can be things other than missing files,
+		// eg permissions errors.
 		return nil
 	}
 	defer fp.Close()
@@ -215,90 +229,54 @@ func loadList(fname string) addrList {
 	}
 }
 
-// Iterate through a string of the form 'a.b.c', returning '.b.c', '.c',
-// and then ''.
-type sDotIter struct {
-	s string
-	p int // points to the dot.
-}
-
-func (s *sDotIter) Next() string {
-	idx := strings.IndexByte(s.s[s.p+1:], '.')
-	if idx == -1 {
-		return ""
-	}
-	s.p += idx + 1
-	return s.s[s.p:]
-}
-
-func inHostList(host string, alist addrList) bool {
-	host = strings.ToLower(host)
-	if alist[host] || alist["."+host] {
-		return true
-	}
-	si := &sDotIter{s: host}
-	for h := si.Next(); h != ""; h = si.Next() {
-		if alist[h] {
-			return true
-		}
-	}
-	return false
-}
-
-// def is what to return if the addrlist is nil.
-func inAddrList(addr string, alist addrList, def bool) bool {
-	var ts string
-	if alist == nil {
-		return def
-	}
-	addr = strings.ToLower(addr)
-	idx := strings.IndexByte(addr, '@')
-	if idx == -1 {
-		return alist[addr]
-	}
-	local := addr[:idx+1]
-	domain := addr[idx:]
-	if alist[addr] || alist[local] || alist[domain] {
-		return true
-	}
-	// Look for partial domain match
-	// Note that domain starts with an @, so we must skip it when
-	// setting things up.
-	// trivial root: a bare '@' matches everything.
-	// TODO: do I want this? Allowing it makes this code simpler,
-	// though.
-	si := &sDotIter{s: domain[1:]}
-	for ts != "@" {
-		ts = "@" + si.Next()
-		if alist[ts] {
-			return true
-		}
-	}
-	// base case: we have '@dom.ain' and want to match a '@.dom.ain' entry
-	ts = "@." + domain[1:]
-	return alist[ts]
-}
-
 // ----
-func loadRules(fname string) []*Rule {
-	if fname == "" {
-		return nil
-	}
+// Load a|the rule file. We assume filename is non-empty.
+func loadRules(fname string) ([]*Rule, error) {
 	fp, err := os.Open(fname)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer fp.Close()
 	b, err := ioutil.ReadAll(fp)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	rl, e := Parse(string(b))
 	if e != nil {
-		warnf("rules parsing error %s\n", *e)
-		return nil
+		return nil, errors.New(fmt.Sprintf("rules parsing error %s", *e))
 	}
-	return rl
+	return rl, nil
+}
+
+// Take our base rules from command line options and a possible rules
+// file and return the rules to use, possibly with a fatal error string.
+// If there are serious load problems we use the rules system itself to
+// return 'rules' that are a single rule that will defer everything.
+// Normally all errors loading a rules file are bad and result in stalls;
+// emptyrulesokay allows us to continue with the base rules if the file
+// is not there or loads empty. Parse errors are *always* bad.
+func setupRules(rulesfile string, baserules []*Rule) ([]*Rule, *string) {
+	if rulesfile == "" {
+		return baserules, nil
+	}
+	rules, err := loadRules(rulesfile)
+	// Our rule is that if we're going to stall all activity, we're
+	// going to write a warning message about it.
+	// TODO: write it once per problem. This will probably take a
+	// channel.
+	switch {
+	case rules != nil && (len(rules) > 0 || emptyrulesokay):
+		return append(baserules, rules...), nil
+	case os.IsNotExist(err) && emptyrulesokay:
+		return baserules, nil
+	case err != nil:
+		warnf("problem loading rules %s: %s\n", rulesfile, err)
+	default:
+		warnf("empty rules loaded from %s\n", rulesfile)
+	}
+
+	// If the rules fail to load, we panic and stall everything.
+	return Parse("stall all")
 }
 
 // ----
@@ -350,6 +328,8 @@ func ipPresent(ip string) bool {
 // This is used to log the SMTP commands et al for a given SMTP session.
 // It encapsulates the prefix. Perhaps we could do this some other way,
 // for example with a function closure, but PUNT for now.
+// TODO: I'm convinced this is the wrong interface. See
+//    http://utcc.utoronto.ca/~cks/space/blog/programming/GoLoggingWrongIdiom
 type smtpLogger struct {
 	prefix []byte
 	writer *bufio.Writer
@@ -374,23 +354,30 @@ func (log *smtpLogger) Write(b []byte) (n int, err error) {
 	return n, err
 }
 
+// ----
+//
 // SMTP transaction data accumulated for a single message. If multiple
 // messages were delivered over the same Conn, some parts of this will
 // be reused.
 type smtpTransaction struct {
 	raddr, laddr net.Addr
-	heloname     string
-	from         string
-	rcptto       []string
+	rip          string
+	rdns         *rDnsResults
+
+	// these tracking fields are valid only after the relevant
+	// phase/command has been accepted, ie they have the *accepted*
+	// EHLO name, MAIL FROM, etc.
+	heloname string
+	from     string
+	rcptto   []string
 
 	data     string
 	hash     string    // canonical hash of the data, currently SHA1
 	bodyhash string    // canonical hash of the message body (no headers)
 	when     time.Time // when the email message data was received.
 
-	rip  string
-	rdns *rDnsResults
-
+	// Reflects the current state, so tlson false can convert to
+	// tlson true over time. cipher is valid only if tlson is true.
 	tlson  bool
 	cipher uint16
 }
@@ -473,6 +460,8 @@ func msgDetails(prefix string, trans *smtpTransaction) ([]byte, string) {
 }
 
 // Log details about the message to the logfile.
+// Not all details covered by msgDetails() are reflected in the logfile,
+// which is intended to be more terse.
 func logMessage(prefix string, trans *smtpTransaction, logf io.Writer) {
 	if logf == nil {
 		return
@@ -535,6 +524,8 @@ func handleMessage(prefix string, trans *smtpTransaction, logf io.Writer) (strin
 	}
 
 	tgt := savedir + "/" + hash
+	// O_CREATE|O_EXCL will fail if the file already exists, which
+	// is okay with us.
 	fp, err := os.OpenFile(tgt, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0666)
 	if err == nil {
 		fp.Write(m)
@@ -549,46 +540,14 @@ func handleMessage(prefix string, trans *smtpTransaction, logf io.Writer) (strin
 	return hash, err
 }
 
-// We could do a better job of validating the EHLO if we wanted to,
-// eg looking for properly formed IPv4 and IPv6 literal addresses, but
-// no. This is a quick hack to get rid of obviously terrible things,
-// basically the people who EHLO with 'randomnodotsstring', because
-// they tend to be completely uninteresting spam.
-func acceptHelo(helo string) bool {
-	if !dothelo {
-		return true
-	}
-	idx := strings.IndexByte(helo, '.')
-	idx2 := strings.IndexByte(helo, ':') // for IPv6 literal addresses
-	if idx != -1 || idx2 != -1 {
-		return true
-	} else {
-		return false
-	}
-}
-
-// Cannot be a route address (starts with '@') or terribly mangled (starts
-// with '<'). Must have a non-empty local part and domain part.
-// smtpd.go's addr_valid() has already checked that there is an '@' and
-// a '.' after the @.
-func isGoodAddress(addr string) bool {
-	if addr == "" {
-		return true
-	}
-	// We reject route addresses, and also people who send us
-	// 'MAIL FROM:<<....>>' (yes, they do this sometimes).
-	if addr[0] == '<' || addr[0] == '@' {
-		return false
-	}
-	// axiomatically '@' is not the first character so there is a
-	// non-null local part.
-	return true
-}
-
-func gronk(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id string) bool {
-	if c == nil {
-		return false
-	}
+// Decide what to do and then do it if it is a rejection or a tempfail.
+// If given an id (and it is in the message handling phase) we call
+// RejectData(). This is our convenience driver for the rules engine,
+// Decide().
+//
+// Returns false if the message was accepted, true if decider() handled
+// a rejection or tempfail.
+func decider(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id string) bool {
 	res := Decide(ph, evt, c)
 	if res == aNoresult || res == aAccept {
 		return false
@@ -615,11 +574,12 @@ func gronk(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id stri
 // is true but it's also the case that we're passing an unused tls.Config
 // in, so the lock should be at its zero value. Right now I decline to make
 // the code more elaborate to pacify 'go vet'.
-func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.Writer) {
+func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.Writer, baserules []*Rule) {
 	var evt smtpd.EventInfo
 	var convo *smtpd.Conn
 	var l2 io.Writer
-	var poisoned bool
+
+	defer nc.Close()
 
 	trans := &smtpTransaction{}
 	trans.raddr = nc.RemoteAddr()
@@ -627,18 +587,15 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 	prefix := fmt.Sprintf("%d/%d", os.Getpid(), cid)
 	trans.rip, _, _ = net.SplitHostPort(nc.RemoteAddr().String())
 
-	fromrej := loadList(fromreject)
-	toacpt := loadList(toaccept)
-	helorej := loadList(heloreject)
-
-	// TODO: set permanent tempfail if rulesfile is set and the
-	// rules do not load?
-	// That's for when we go heavily into rules, of course.
 	var c *Context
-	rules := loadRules(rulesfile)
-	if rules != nil && len(rules) > 0 {
-		c = newContext(trans, rules)
+	rules, e := setupRules(rulesfile, baserules)
+	if e != nil || len(rules) == 0 {
+		// something really seriously bad happened here. bail.
+		warnf("PANIC: error parsing minimal ruleset: %s\n", *e)
+		return
 	}
+	c = newContext(trans, rules)
+	//fmt.Printf("rules are:\n%+v\n", rules)
 
 	if smtplog != nil {
 		logger := &smtpLogger{}
@@ -686,21 +643,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 		case smtpd.COMMAND:
 			switch evt.Cmd {
 			case smtpd.EHLO, smtpd.HELO:
-				if failhelo || !acceptHelo(evt.Arg) {
-					convo.Reject()
-					continue
-				}
-				// If a host is listed in the no-EHLO list,
-				// we don't immediately reject it; historically
-				// some MTAs have not liked that. We defer
-				// rejection until MAIL FROM.
-				// Note that poisoning is permanent; once
-				// you EHLO with a bad name, it cannot be
-				// reset.
-				if inHostList(evt.Arg, helorej) {
-					poisoned = true
-				}
-				if gronk(pHelo, evt, c, convo, "") {
+				if decider(pHelo, evt, c, convo, "") {
 					continue
 				}
 				trans.heloname = evt.Arg
@@ -710,47 +653,19 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 				trans.bodyhash = ""
 				trans.rcptto = []string{}
 			case smtpd.MAILFROM:
-				if failmail || !isGoodAddress(evt.Arg) {
-					convo.Reject()
-					continue
-				}
-				if evt.Arg != "" && inAddrList(evt.Arg, fromrej, false) {
-					convo.Reject()
-					continue
-				}
-				// Trivial root: we accept MAIL FROM:<>
-				// even from poisoned hosts and defer rejection
-				// to RCPT TO time. This is more RFC compliant
-				// and therefor less likely to cause MTAs to
-				// choke.
-				if evt.Arg != "" && poisoned {
-					convo.Reject()
-					continue
-				}
-				if gronk(pMfrom, evt, c, convo, "") {
+				if decider(pMfrom, evt, c, convo, "") {
 					continue
 				}
 				trans.from = evt.Arg
 				trans.data = ""
 				trans.rcptto = []string{}
 			case smtpd.RCPTTO:
-				if failrcpt || !isGoodAddress(evt.Arg) || poisoned {
-					convo.Reject()
-					continue
-				}
-				if !inAddrList(evt.Arg, toacpt, true) {
-					convo.Reject()
-					continue
-				}
-				if gronk(pRto, evt, c, convo, "") {
+				if decider(pRto, evt, c, convo, "") {
 					continue
 				}
 				trans.rcptto = append(trans.rcptto, evt.Arg)
 			case smtpd.DATA:
-				if faildata {
-					convo.Reject()
-				}
-				gronk(pData, evt, c, convo, "")
+				decider(pData, evt, c, convo, "")
 			}
 		case smtpd.GOTDATA:
 			// message rejection is deferred until after logging
@@ -767,21 +682,20 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 			switch {
 			case err != nil:
 				convo.Tempfail()
-			case failgotdata:
-				convo.RejectData(transid)
-			case gronk(pMessage, evt, c, convo, transid):
-				// do nothing, already gronkd
+			case decider(pMessage, evt, c, convo, transid):
+				// do nothing, already handled
 			default:
 				convo.AcceptData(transid)
 			}
 		case smtpd.TLSERROR:
+			// any TLS error means we'll avoid offering TLS
+			// to this source IP for a while.
 			ipAdd(trans.rip)
 		}
 		if evt.What == smtpd.DONE || evt.What == smtpd.ABORT {
 			break
 		}
 	}
-	nc.Close()
 }
 
 // Listen for new connections on a net.Listener, send the result to
@@ -796,20 +710,26 @@ func listener(conn net.Listener, listenc chan net.Conn) {
 }
 
 // Our absurd collection of global settings.
+
+// These settings are turned into rules.
 var failhelo bool
 var failmail bool
 var failrcpt bool
 var faildata bool
 var failgotdata bool
+var fromreject string
+var toaccept string
+var heloreject string
+var dothelo bool
+
+// other settings.
+var rulesfile string
+
 var goslow bool
 var srvname string
 var savedir string
 var hashtype string
-var dothelo bool
-var fromreject string
-var toaccept string
-var heloreject string
-var rulesfile string
+var emptyrulesokay bool
 
 func openlogfile(fname string) (outf io.Writer, err error) {
 	if fname == "" {
@@ -822,12 +742,72 @@ func openlogfile(fname string) (outf io.Writer, err error) {
 		os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0666)
 }
 
+// Build the baseline rules that reflect the options.
+func buildRules() []*Rule {
+	var outbuf bytes.Buffer
+	// We must split these rules because otherwise the to-has
+	// requirement would defer this rule until RCPT TO even if
+	// the MAIL FROM was bad.
+	fmt.Fprintf(&outbuf, "reject from-has bad,route\n")
+	fmt.Fprintf(&outbuf, "reject to-has bad,route\n")
+
+	if failhelo {
+		fmt.Fprintf(&outbuf, "@helo reject all\n")
+	}
+	if failmail {
+		fmt.Fprintf(&outbuf, "@from reject all\n")
+	}
+	if failrcpt {
+		fmt.Fprintf(&outbuf, "@to reject all\n")
+	}
+	if faildata {
+		fmt.Fprintf(&outbuf, "@data reject all\n")
+	}
+	if failgotdata {
+		fmt.Fprintf(&outbuf, "@message reject all\n")
+	}
+	if dothelo {
+		fmt.Fprintf(&outbuf, "reject helo-has nodots\n")
+	}
+
+	// File based rejections.
+	// We implicitly assume that there are no bad characters in the
+	// filenames, because we currently don't have any way of quoting
+	// things in the rule language. Moral: don't do that.
+	// (Doing that will probably cause parsing to fail, so at least
+	// we'll notice.)
+	if fromreject != "" {
+		fmt.Fprintf(&outbuf, "reject from file:%s\n", fromreject)
+	}
+	// It's not that we accept addresses in toaccept, it's that we
+	// reject addresses that are not in it.
+	if toaccept != "" {
+		fmt.Fprintf(&outbuf, "reject not to file:%s\n", toaccept)
+	}
+	// standard heloreject behavior is to defer rejection until
+	// MAIL FROM, because mail servers deal better with that.
+	if heloreject != "" {
+		fmt.Fprintf(&outbuf, "@from reject helo file:%s\n", heloreject)
+	}
+
+	// Parse the text into actual rules.
+	s := outbuf.String()
+	rules, err := Parse(s)
+	if err != nil {
+		// This should not normally happen, but you know...
+		die("error parsing autogenerated rules: %s\nrules:\n%s", *err, s)
+	}
+	return rules
+}
+
 func main() {
 	var smtplogfile, logfile string
 	var certfile, keyfile string
 	var force bool
 	var tlsConfig tls.Config
 
+	// TODO: I need a better flag handling package because I have so
+	// many of them and the messages are so long.
 	flag.BoolVar(&failhelo, "H", false, "reject all HELO/EHLOs")
 	flag.BoolVar(&failmail, "F", false, "reject all MAIL FROMs")
 	flag.BoolVar(&failrcpt, "T", false, "reject all RCPT TOs")
@@ -847,12 +827,15 @@ func main() {
 	flag.StringVar(&toaccept, "toaccept", "", "if set, filename of address patterns to accept in RCPT TOs (all others will be rejected if there are any entries in the file)")
 	flag.StringVar(&heloreject, "heloreject", "", "if set, filename of address patterns to reject in EHLO/HELO names")
 	flag.StringVar(&rulesfile, "r", "", "if set, filename of a set of control rules")
+	flag.BoolVar(&emptyrulesokay, "allow-empty-rules", false, "if set, an empty or missing rules file does not stall incoming email")
 
 	flag.Parse()
 	if flag.NArg() == 0 {
 		fmt.Fprintln(os.Stderr, "usage: sinksmtp [options] host:port [host:port ...]")
 		return
 	}
+	// This is theoretically too pessimistic in the face of a rules file,
+	// but in that case you can give --force-receive. So.
 	if savedir == "" && !(force || failhelo || failmail || failrcpt || faildata || failgotdata) {
 		die("I refuse to accept email without either a -d savedir or --force-receive\n")
 	}
@@ -890,6 +873,8 @@ func main() {
 		die("error opening logfile '%s': %v\n", logfile, err)
 	}
 
+	// Save a lot of explosive problems by testing if we can actually
+	// use the savedir right now, *before* we start doing stuff.
 	if savedir != "" {
 		tstfile := savedir + "/.wecanmake"
 		fp, err := os.Create(tstfile)
@@ -899,6 +884,8 @@ func main() {
 		fp.Close()
 		os.Remove(tstfile)
 	}
+
+	baserules := buildRules()
 
 	// Set up a pool of listeners, one per address that we're supposed
 	// to be listening on. These are goroutines that multiplex back to
@@ -920,7 +907,7 @@ func main() {
 	cid := 1
 	for {
 		nc := <-listenc
-		go process(cid, nc, tlsConfig, logf, slogf)
+		go process(cid, nc, tlsConfig, logf, slogf, baserules)
 		cid += 1
 	}
 }

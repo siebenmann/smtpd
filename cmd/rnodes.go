@@ -319,7 +319,7 @@ func newDnsOpt(o Option) Expr {
 }
 
 func newHeloOpt(o Option) Expr {
-	return &OptionN{what: "helo-with", opts: o, getter: heloGetter}
+	return &OptionN{what: "helo-has", opts: o, getter: heloGetter}
 }
 
 func getFromOpts(c *Context) Option {

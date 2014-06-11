@@ -20,7 +20,9 @@
 // there is 'or' 'not' and '( ... )'.
 //	reject helo somename from info@fbi.gov not to interesting@addr
 //
-// ADDRESS and HOST can be a filename.
+// ADDRESS and HOST can be a filename. Filenames are recognized in
+// three forms: '/a/file' (absolute), './a/rel' (explicitly relative),
+// and 'file:<whatever>' (explicitly marked).
 //
 // rules about RCPT TO addresses match only the *current* RCPT TO
 // address being considered.
@@ -35,9 +37,13 @@
 //	reject from info@fbi.gov to fred@barney or to joe@jim
 // ... rejects from: info@fbi.gov, to either fred or joe.
 //
+// TODO: write standalone documentation, including on address and
+// hostname patterns.
+//
 package main
 
 import (
+	//"fmt"
 	"github.com/siebenmann/smtpd"
 	"strings"
 )
@@ -94,23 +100,26 @@ func newContext(trans *smtpTransaction, rules []*Rule) *Context {
 // This is currently a hack, as we load a map then turn it into a list
 // when we could just load a list. And probably should.
 func (c *Context) getMatchList(a string) []string {
-	if a[0] != '/' {
+	var fname string
+	switch {
+	case a[0] == '/' || strings.HasPrefix(a, "./"):
+		fname = a
+	case strings.HasPrefix(a, "file:"):
+		fname = a[len("file:"):]
+	default:
 		return []string{a}
 	}
-	if c.files[a] != nil {
-		return c.files[a]
+
+	if c.files[fname] != nil {
+		return c.files[fname]
 	}
-	l := loadList(a)
+	l := loadList(fname)
 	if l == nil {
-		c.files[a] = []string{}
-		return c.files[a]
+		c.files[fname] = []string{}
+		return c.files[fname]
 	}
-	var v []string
-	for k, _ := range l {
-		v = append(v, k)
-	}
-	c.files[a] = v
-	return c.files[a]
+	c.files[fname] = l
+	return c.files[fname]
 }
 
 //
@@ -195,6 +204,22 @@ func getAddrOpts(a string) (o Option) {
 
 // -----
 
+// Iterate through a string of the form 'a.b.c', returning '.b.c', '.c',
+// and then ''.
+type sDotIter struct {
+	s string
+	p int // points to the dot.
+}
+
+func (s *sDotIter) Next() string {
+	idx := strings.IndexByte(s.s[s.p+1:], '.')
+	if idx == -1 {
+		return ""
+	}
+	s.p += idx + 1
+	return s.s[s.p:]
+}
+
 // Match addresses. We do not attempt to do complicated matching on
 // crazy addresses, such as route addresses or addresses that have
 // the @ at the end.
@@ -218,6 +243,9 @@ func matchAddress(addr string, pat string) bool {
 	}
 	// Try partial domain matches, right down to '@' which matches
 	// anything that had a domain at all.
+	// Since the domain starts with an @ we must skip it when
+	// setting things up.
+	// As a consequence of this, a bare '@' matches everything.
 	var ts string
 	si := &sDotIter{s: domain[1:]}
 	for ts != "@" {
@@ -271,6 +299,7 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 
 	var ret Action
 	ret = aNoresult
+	//fmt.Printf("running in %s\n", ph)
 
 	for _, r := range c.ruleset {
 		// Try to determine if we can run this rule.
@@ -285,12 +314,19 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 			// we could satisfy the rule's requirements but it
 			// wants to be deferred until later. skip.
 			continue
+
+			// Things we still have to process now:
 		case rr <= aAccept:
 			// Accept rules must always be checked because
 			// they don't block us from continuing.
 			// (so we do 'pass' here)
 
-		case (rp == pAny && ph > pHelo) || (rp != pAny && rp > ph):
+		case r.deferto == ph:
+			// A rule that has been defered to now must be
+			// processed now regardless of its requires.
+
+			// Final skip case:
+		case (rp == pAny && ph > pHelo) || (rp != pAny && rp < ph):
 			// We can skip aReject and aStall rules if they
 			// require a phase before this one, because if
 			// they matched they would have blocked us from
@@ -298,15 +334,20 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 			continue
 		}
 
+		//fmt.Printf("evaling: %v", r)
 		c.rulemiss = false
 		res := r.expr.Eval(c)
 		if c.rulemiss {
+			//fmt.Printf(" ... rulemiss set, skip\n")
 			continue
 		}
 		if res {
 			ret = r.result
+			//fmt.Printf(" matched and: %v\n", ret)
 			break
 		}
+		//fmt.Printf("\n")
+
 	}
 
 	// Handle deferred results due to MAIL FROM:<>.
@@ -328,5 +369,6 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 		ret = aAccept
 	}
 
+	//fmt.Printf("eval done, result: %v\n", ret)
 	return ret
 }
