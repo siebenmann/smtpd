@@ -750,6 +750,8 @@ func buildRules() []*Rule {
 	// the MAIL FROM was bad.
 	fmt.Fprintf(&outbuf, "reject from-has bad,route\n")
 	fmt.Fprintf(&outbuf, "reject to-has bad,route\n")
+	// We never accept blank EHLO/HELO, although smtpd will.
+	fmt.Fprintf(&outbuf, "reject helo-has none\n")
 
 	if failhelo {
 		fmt.Fprintf(&outbuf, "@helo reject all\n")
