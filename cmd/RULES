@@ -1,0 +1,296 @@
+== THE RULES FILE
+
+In addition to its many command line options for controlling what gets
+accepted and rejected when, sinksmtp also lets you give it a file of
+rules. Rules let you describe things like:
+
+	reject from info@fbi.gov to joe@example.com
+
+This rejects a RCPT TO of 'joe@example.com' if the MAIL FROM was
+'info@fbi.gov'.
+
+Sinksmtp command line options take priority over rules. If you
+use -F to reject all MAIL FROMs, anything your rule file says
+about it ignored.
+
+The rule file and everything it refers to is loaded and parsed
+at each new connection. See later for what happens if there is
+an error.
+
+The general form of a rule is:
+	[PHASE] ACTION MATCH-OP [MATCH-OP....]
+
+The action is one of 'accept', 'reject', or 'stall' (which emits SMTP 4xx
+temporary failure messages). The optional phase says that the rule should
+only be checked and take effect in that phase of the SMTP transaction
+and is one of:
+
+	@helo @from @to @data @message
+
+@data is when the DATA command is received but before the sender has
+been authorized to send the message; @message is after the message has
+been received.
+
+Rules are normally checked at any time where they're applicable and
+where all of the information they need is available. A rule that does
+things with MAIL FROM addresses will not match before @from; a rule that
+does things with RCPT TO addresses will not match before @to (and thus
+can't be used to, say, reject a MAIL FROM). It is an error to specify
+an explicit phase that is before all of the requirements for the rule,
+ie the following is an error:
+
+	@from reject to joe@example.com
+
+Most match operations take an argument, as seen.  Match operators can
+be negated with 'not':
+
+	reject not from info@fbi.gov to joe@example.com
+
+Anything to joe@example.com that is not from info@fbi.gov will be
+rejected.
+
+The default behavior of a series of match operations is that all
+of them must match in order for the rule to apply. This can be
+changed with the 'or' operator:
+
+	reject from info@fbi.gov to joe@example.com or jim@example.org
+
+Or binds more tightly than a plain series of match operators, so this
+means:
+	reject from info@fbi.gov (to joe@example.com or jim@example.org)
+
+As seen here, rules can have ( ... ) to change the ordering or just to
+be clear about grouping.
+
+Long rule lines can be continued with a ' \' at the end of the line,
+eg:
+	@message reject (from info@fbi.gov or from @.mil or from bounce@) \
+		 to fred@example.net not host trusted.host
+
+The rule file can have blank lines and comment lines, which start with
+'#':
+	# this is a comment
+	@data reject all
+
+Rules are evaluated in order and the first matching rule wins.
+
+THE BIG LIST OF MATCH OPERATORS (AND ARGUMENTS)
+
+ all			always matches
+
+ from APAT, to APAT	match MAIL FROM or RCPT TO respectively against
+			address pattern APAT, to be discussed later.
+
+			Note that 'to APAT' checks *the current* RCPT
+			TO address, not all of the accumulated RCPT TO
+			addresses so far. A rule that specifies
+			'to a@b to c@d' will never match.
+
+ helo HPAT		match the name the client gave in its HELO/EHLO
+			against the hostname pattern HPAT, to be discussed
+			later.
+
+ host HPAT		match the verified hostname of the remote IP
+			(if one exists) against the hostname pattern
+			HPAT. The hostname is obtained (and verified)
+			through DNS.
+
+ tls on|off		match if TLS is on or off respectively on the
+			connection. This doesn't match before MAIL FROM
+			right now, because clients initially connect in
+			the clear, EHLO once to find out if they can
+			start TLS, start TLS, and then EHLO again.
+			We don't know for more or less sure if a client
+			is or isn't going to do TLS until MAIL FROM time.
+
+ from-has AATTRS, to-has AATTRS
+			the MAIL FROM or RCPT TO address has at least
+			one of the address attributes AATTRS. AATTRS is
+			a comma-separated list of specific options.
+ helo-has HATTRS	The EHLO/HELO command and its value has at least
+			one of the HELO attributes HATTRS, a comma
+			separated etc etc.
+ dns DATTRS		Reverse DNS for the remote IP has at least one
+			of these attributes; a comma separated list.
+
+Address and hostname patterns are more commonly used, so I'll talk
+about them first.  Both address and hostname patterns can either be a
+single pattern or a filename. Filenames are recognized in three forms:
+'/a/file', './relative/file', or 'file:<whatever-path>'. Filenames
+are expected to have one pattern per line and can contain both blank
+lines and comment lines, which start with '#'.
+
+*AN EMPTY OR MISSING FILE CAUSES ITS RULE TO NOT MATCH AT ALL*.
+The rule:
+	accept from /no/such/file
+
+will never match anything. The technicality is that this only applies
+if the match operator is checked, which it may not be if something else
+causes the rule to fail (or succeed) earlier. Thus the following rule
+will never care that the file doesn't exist:
+
+	accept all or from /no/such/file
+
+Like rules files, every address/hostname pattern file is loaded anew
+for every new connection.
+
+Address patterns and addresses are both lower-cased before being
+checked against each other. It's conventional to write them in
+all lower case for clarity.
+
+Address patterns themselves can be several things:
+	<>		matches 'MAIL FROM:<>', the null sender address.
+			It can never match a to address because those do
+			not allow null addresses.
+	a@b		does a literal match against the address
+	a@		matches the local portion 'a' at any domain.
+			this will also match eg 'RCPT TO:<a>', ie no
+			domain specified in the address.
+	@b		matches any local portion at the domain 'b'.
+			Note that it doesn't match subdomains, eg 'c.b'.
+	@.b.com		matches the domain 'b.com' and any subdomains of it,
+			eg 'c.b.com' or 'd.c.b.com'.
+	@		matches any address with a local part and a domain.
+			in practice this is generally 'any address'.
+
+An address that starts or ends with an '@' will not be matched by any
+address pattern here. It's probably broken and in any case sinksmtp
+doesn't understand it well enough to match it. Such addresses can be
+rejected through other means; see 'from-has' and 'to-has' and address
+attributes.
+
+A hostname pattern is either of the things that can appear on the
+domain side of an address pattern, that is to say either 'b.com'
+(matches literally) or '.b.com' (matches b.com and any subdomains).
+
+ATTRIBUTES:
+
+AATTRS is one or more of:
+	route	address appears to be a route address.
+	noat	address has no '@' in it, ie 'MAIL FROM:<aname>'.
+	quoted	address has a '"' in it, typically as a quoted local
+		part:	MAIL FROM:<"fred@bob"@example.org>
+		Typically done only by spammers.
+	unqualified	the apparent domain (if any) of the address doesn't
+			have a '.' in it, ie:
+				MAIL FROM:<fred@localname>
+	garbage		The address just seems to be garbled garbage.
+	bad	bad is equivalent to 'noat,quoted,unqualified,garbage',
+		ie everything except 'route'.
+
+sinksmtp is somewhat casual about determining whether or not an address
+really has these attributes; basically it looks for characters in the
+address or at certain positions in the address instead of formally
+parsing it.
+
+DATTRS is one or more of:
+	nodns		remote IP has no verified hostnames
+	noforward	remote IP has PTR entries for names that don't
+			exist (or at least, don't resolve to IP addresses)
+	inconsistent	remote IP has PTR entries for names that exist
+			but don't have the remote IP as one of their IP
+			addresses.
+	good		remote IP has good DNS, ie
+				not dns nodns,noforward,inconsistent
+	exists		remote IP has at least one verified hostname,
+			ie 'not dns nodns'
+
+Under normal circumstances you probably don't care about noforward
+or inconsistent.
+
+HATTRS is one or more of:
+	none		There was no EHLO/HELO name give, just 'EHLO'.
+			This can't match right now because sinksmtp
+			itself rejects such names.
+	helo		The client used the 'HELO' command instead of 'EHLO'
+	ehlo		The client used 'EHLO' instead of 'HELO'
+	nodots		The HELO name doesn't have any dots in it (and
+			technically we allow a : instead), ie it is just
+			'EHLO fred' instead of 'EHLO fred.whatever'.
+	bareip		The HELO name appears to be just a bare IP address,
+			eg 'HELO 127.0.0.1' (instead of 'HELO [127.0.0.1]').
+
+
+BEHAVIOR ON ERRORS DURING RULE LOADING
+
+If there is a a parse error (or an IO error) during loading of the rule
+file, sinksmtp switches to giving 4xx responses to everything, which
+in practice means EHLO/HELO commands. Sinksmtp normally also does this
+if your rule file is missing or specifies no rules (ie it has nothing
+but comments or blank lines), but you can turn this behavior off with
+-allow-empty-rules.
+
+-allow-empty-rules is appropriate when your rules file is just a
+supplement for extra-complicated situations and you mostly do stuff with
+sinksmtp's command line options. It's probably not at all what you want
+if your rules file is how you're controlling everything.
+
+=== Things to note:
+
+Regardless of what rules you write, sinksmtp never gives a 5xx or 4xx
+reply to a 'MAIL FROM:<>'. If your rules reject or stall this MAIL FROM,
+the rejection or stall is deferred until the following RCPT TOs.
+
+You might wonder what the following does, given that you might have
+multiple RCPT TO addresses:
+	@data reject to jim@example.com
+
+The answer is basically that it does what you expect. When sinksmtp
+receives a DATA command, it checks all accepted RCPT TO addresses and
+then rejects the DATA command if any of them are 'jim@example.com'.
+The accepted RCPT TO addresses are still checked against the rule one
+by one.
+
+That rules can only match when all of the information necessary for
+them to be checked is available means that there is an important
+difference between:
+	reject from-has bad or to-has bad
+and
+	reject from-has bad
+	reject to-has bad
+
+The former rejects due to a bad MAIL FROM address only when the client
+does a RCPT TO; because the rule uses 'to-has', it can't be checked at
+all until RCPT TO. Since the latter is two rules, they will be checked
+separately and the bad MAIL FROM rejected immediately.
+
+=== How sinksmtp's command line options are implemented
+
+Sinksmtp actually translates all of its what-to-accept options into
+rules. These rules are then checked before your rules file, giving
+them priority over your rules.
+
+Right now, how things translate is:
+	# standard rules that are always present
+	reject from-has bad,route
+	reject to-has bad,route
+	reject helo-has none
+
+	# -H
+	@helo reject all
+	# -F
+	@from reject all
+	# -T
+	@to reject all
+	# -D
+	@data reject all
+	# -M
+	@message reject all
+	# -dothelo
+	reject helo-has nodots
+
+	# -fromreject
+	reject from file:<whatever>
+	# -toaccept
+	reject not to file:<whatever>
+	# -heloreject
+	@from reject helo file:<whatever>
+
+Standard -heloreject defers rejecting due to EHLO/HELO until MAIL FROM
+time because of my perception that various mailers deal better with this
+(ie, they don't expect to have their EHLOs rejected and will sail on or
+retry immediately or the like).
+
+The 'stall everything on rules file parse error' behavior is also
+implemented with a rule. On such errors, 'stall all' becomes the only
+rule that's set up for each connection.
