@@ -344,7 +344,9 @@ func (log *smtpLogger) Write(b []byte) (n int, err error) {
 	//	return
 	//}
 
-	var buf []byte
+	// we might as well create the buffer at the right size.
+	buf := make([]byte, 0, len(b)+len(log.prefix))
+
 	buf = append(buf, log.prefix...)
 	buf = append(buf, b...)
 	n, err = log.writer.Write(buf)
@@ -802,6 +804,42 @@ func buildRules() []*Rule {
 	return rules
 }
 
+func Usage() {
+	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "\t%s [options] host:port [host:port ...]\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "\nOptions:\n")
+	flag.PrintDefaults()
+	fmt.Fprintf(os.Stderr, usage)
+}
+
+var usage = `
+See the manual for more comprehensive documentation.
+
+Quick notes:
+-helo's default value is either the hostname of the IP of the local
+IP for the connection or 'IP:port' if the IP has no hostname.
+
+The rejection from -M is applied after -d and/or -l, so a received
+email will be saved and/or have its details logged before being
+5xx'd to the client.
+
+-save-hash's options are 'all' (all available information, almost
+always unique names), 'full' (message plus most envelope metadata),
+or 'msg' (actual received message only). Using 'msg' requires -l.
+Setting -save-hash is meaningless without -d.
+
+An empty or missing -fromreject, -heloreject, and/or -toaccept file
+behaves as if the option hadn't been set. Files are checked and
+reloaded for each new connection and thus can be changed on the fly.
+If -toaccept is active, addresses that do not match something in
+the file are rejected.
+
+Without -allow-empty-rules, a -r file that is missing or empty
+causes all client commands to get a 4xx temporary failure reply.
+Parse errors in the rule file always cause 4xx temporary failures.
+The rules file is checked and reloaded for each new connection.
+`
+
 func main() {
 	var smtplogfile, logfile string
 	var certfile, keyfile string
@@ -814,26 +852,29 @@ func main() {
 	flag.BoolVar(&failmail, "F", false, "reject all MAIL FROMs")
 	flag.BoolVar(&failrcpt, "T", false, "reject all RCPT TOs")
 	flag.BoolVar(&faildata, "D", false, "reject all DATA commands")
-	flag.BoolVar(&failgotdata, "M", false, "reject all messages after they're fully received. This rejection is 'fake', as messages may still be logged and/or saved if either is configured.")
-	flag.BoolVar(&goslow, "S", false, "send output to the network at one character every tenth of a second")
-	flag.StringVar(&srvname, "helo", "", "server name to advertise in greeting banners, defaults to local IP:port of connection")
-	flag.StringVar(&smtplogfile, "smtplog", "", "filename for SMTP conversation logs, '-' means standard output, no default")
-	flag.StringVar(&logfile, "l", "", "filename of the transaction log, no default")
+	flag.BoolVar(&failgotdata, "M", false, "reject all messages after DATA")
+	flag.BoolVar(&goslow, "S", false, "send output to the network slowly (10 characters/sec)")
+	flag.StringVar(&srvname, "helo", "", "server name for greeting banners")
+	flag.StringVar(&smtplogfile, "smtplog", "", "log all SMTP conversations to here, '-' for stdout")
+	flag.StringVar(&logfile, "l", "", "log summary info about received email to here, '-' for stdout")
 	flag.StringVar(&savedir, "d", "", "directory to save received messages in")
-	flag.BoolVar(&force, "force-receive", false, "force accepting email even without a savedir")
-	flag.StringVar(&hashtype, "save-hash", "all", "hash name for saved messages is based on the actual message ('msg'), message plus most envelope metadata ('full'), or all available information including timestamp ('all')")
-	flag.StringVar(&certfile, "c", "", "TLS PEM certificate file")
-	flag.StringVar(&keyfile, "k", "", "TLS PEM key file")
-	flag.BoolVar(&dothelo, "dothelo", false, "require EHLO/HELO to contain a dot or a :")
-	flag.StringVar(&fromreject, "fromreject", "", "if set, filename of address patterns to reject in MAIL FROMs")
-	flag.StringVar(&toaccept, "toaccept", "", "if set, filename of address patterns to accept in RCPT TOs (all others will be rejected if there are any entries in the file)")
-	flag.StringVar(&heloreject, "heloreject", "", "if set, filename of address patterns to reject in EHLO/HELO names")
-	flag.StringVar(&rulesfile, "r", "", "if set, filename of a set of control rules")
-	flag.BoolVar(&emptyrulesokay, "allow-empty-rules", false, "if set, an empty or missing rules file does not stall incoming email")
+	flag.BoolVar(&force, "force-receive", false, "force accepting email even without a -d directory")
+	flag.StringVar(&hashtype, "save-hash", "all", "what to base the hash name of saved messages on")
+	flag.StringVar(&certfile, "c", "", "TLS PEM certificate file; requires -k too")
+	flag.StringVar(&keyfile, "k", "", "TLS PEM key file; requires -c too")
+	flag.BoolVar(&dothelo, "dothelo", false, "require EHLO/HELO to contain a '.' or a ':'")
+	flag.StringVar(&fromreject, "fromreject", "", "file of address patterns to reject in MAIL FROMs")
+	flag.StringVar(&toaccept, "toaccept", "", "file of address patterns to accept in RCPT TOs")
+	flag.StringVar(&heloreject, "heloreject", "", "file of hostname patterns to reject in EHLOs")
+	flag.StringVar(&rulesfile, "r", "", "file of additional control rules")
+	flag.BoolVar(&emptyrulesokay, "allow-empty-rules", false, "keep going with an empty or missing -r file")
+
+	flag.Usage = Usage
 
 	flag.Parse()
 	if flag.NArg() == 0 {
-		fmt.Fprintln(os.Stderr, "usage: sinksmtp [options] host:port [host:port ...]")
+		fmt.Fprintf(os.Stderr, "%s: no arguments given about what to listen on\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "usage: %s [options] host:port [host:port ...]\n", os.Args[0])
 		return
 	}
 	// This is theoretically too pessimistic in the face of a rules file,
@@ -844,10 +885,10 @@ func main() {
 	if hashtype == "msg" && logfile == "" {
 		// arguably we could rely on the SMTP log if there is one,
 		// but no.
-		die("-save-hash=msg requires a logfile right now\n")
+		die("-save-hash=msg requires a -l right now\n")
 	}
 	if !(hashtype == "msg" || hashtype == "full" || hashtype == "all") {
-		die("bad value for -save-hash: '%s'. Only msg, full, and all are valid.\n", hashtype)
+		die("bad option for -save-hash: '%s'. Only msg, full, and all are valid.\n", hashtype)
 	}
 
 	switch {
