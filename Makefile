@@ -6,3 +6,5 @@ clean:
 
 test:
 	go test && cd cmd && go test
+
+tests: test
