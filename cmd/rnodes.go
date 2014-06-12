@@ -80,20 +80,14 @@ const (
 type Result bool
 
 type Rule struct {
-	// Rule cannot be evaluated until this phase; at most Rto right now.
-	requires Phase
+	expr     Expr // expression to evaluate
 	result   Action
+	requires Phase // Rule requires data from this phase; at most pRto now
+	deferto  Phase // Rule wants to be deferred to this phase
 
-	deferto Phase // Rule result is deferred until this phase
-
-	// Some rules want to defer to stages where data for them is
-	// not actually still available, eg a rule involving RCPT TOs
-	// that defers until @data; if executed at @data time, it will
-	// only see the last RCPT TO. To deal with this we store the
-	// hit state here if it happens.
-	deferhit bool
-
-	expr Expr // expression to evaluate
+	// The rule is that if deferto is set it is always larger than
+	// requires. We don't allow '@from accept to ...' or similar
+	// gimmicks; it's explicitly an error in the parser.
 }
 
 func (r *Rule) String() string {
