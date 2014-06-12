@@ -4,7 +4,7 @@
 // Messages are received in all 8 bits, although we don't advertise
 // 8BITMIME.
 //
-// usage: sinksmtp [options] host:port [host:port ...]
+// usage: sinksmtp [options] [host]:port [[host]:port ...]
 //
 // Options, sensibly organized:
 // -M: always send a rejection after email messages are received (post-DATA).
@@ -806,7 +806,7 @@ func buildRules() []*Rule {
 
 func Usage() {
 	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-	fmt.Fprintf(os.Stderr, "\t%s [options] host:port [host:port ...]\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "\t%s [options] [host]:port [[host]:port ...]\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "\nOptions:\n")
 	flag.PrintDefaults()
 	fmt.Fprintf(os.Stderr, usage)
@@ -871,7 +871,7 @@ func main() {
 	flag.Parse()
 	if flag.NArg() == 0 {
 		fmt.Fprintf(os.Stderr, "%s: no arguments given about what to listen on\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "usage: %s [options] host:port [host:port ...]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "usage: %s [options] [host]:port [[host]:port ...]\n", os.Args[0])
 		return
 	}
 	// This is theoretically too pessimistic in the face of a rules file,
