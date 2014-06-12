@@ -222,6 +222,7 @@ Subject: A test 2
 Done. 2.
 .
 RCPT TO:<e@f.com>
+HELO
 QUIT
 `
 var basicServer = `220 localhost go-smtpd
@@ -237,6 +238,7 @@ var basicServer = `220 localhost go-smtpd
 354 Send away
 250 I've put it in a can
 503 Out of sequence command
+250 localhost Hello 127.10.10.100:56789
 221 Goodbye
 `
 
