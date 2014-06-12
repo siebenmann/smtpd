@@ -7,8 +7,6 @@
 // usage: sinksmtp [options] host:port [host:port ...]
 //
 // Options, sensibly organized:
-// -H, -F, -T, -D: reject everything after EHLO/HELO, MAIL FROM,
-//                 RCPT TO, or DATA respectively. No email will be received.
 // -M: always send a rejection after email messages are received (post-DATA).
 //     This rejection is 'fake' in that message details may be logged and
 //     messages may be saved, depending on other settings.
@@ -51,8 +49,6 @@
 //         in this address list file.
 // -heloreject FILE: reject any EHLO/HELO name that matches something in
 //         in this host list file.
-// -dothelo: insist that every EHLO/HELO have a '.' or a ':', rejecting
-//           obviously bogus ones.
 //
 // Address lists are reloaded from scratch every time we start a new
 // connection. It is valid for them to not exist; this is the same as
@@ -73,16 +69,20 @@
 // with no leading dots matches that name; a name with a starting '.'
 // matches that name or any subdomains of it.
 //
-// -r FILE: use FILE as a rules file. Discussion of rules are beyond
-//          the scope of this already-too-long documentation.
-//          Explicitly set command line options take priority over
-//          rules.
-// -allow-empty-rules: if the rules file fails to load or is empty,
+// -r FILE: use FILE as a core rules file. Core rules are checked
+//          before -s FILE rules and this file can't be missing or
+//          empty of rules.
+// -s FILE: use FILE as an additional rules file.
+// -allow-empty: if the rules file fails to load or is empty,
 //          sinksmtp normally 4xx's all commands. This allows it to
 //          proceeed as normal.
 //
+
+// Discussion of rules are beyond the scope of this already-too-long
+// documentation.  Explicitly set command line options take priority
+// over rules.
 // (Internally, all of the command line options themselves create
-// rules and these rules are evaluated before any in your -r file.)
+// rules and these rules are evaluated before any in your -r/-s files.)
 //
 // LOG ENTRIES AND SAVE FILES:
 // The format of this information is hopefully obvious.
@@ -248,6 +248,26 @@ func loadRules(fname string) ([]*Rule, error) {
 	return rl, nil
 }
 
+// our contract is that we always return either real rules or an error.
+func accumRules(baserules []*Rule, fname string, casual bool) ([]*Rule, error) {
+	if fname == "" {
+		return baserules, nil
+	}
+	rules, err := loadRules(fname)
+	switch {
+	case err == nil && rules != nil && len(rules) > 0:
+		return append(baserules, rules...), err
+	case err != nil && !(casual && os.IsNotExist(err)):
+		return nil, err
+	case casual && (err == nil || os.IsNotExist(err)):
+		// if we've gotten here, len(rules) == 0
+		return baserules, nil
+	default:
+		// non-casual, no errors, but empty rules
+		return nil, errors.New("empty rule file")
+	}
+}
+
 // Take our base rules from command line options and a possible rules
 // file and return the rules to use, possibly with a fatal error string.
 // If there are serious load problems we use the rules system itself to
@@ -255,27 +275,26 @@ func loadRules(fname string) ([]*Rule, error) {
 // Normally all errors loading a rules file are bad and result in stalls;
 // emptyrulesokay allows us to continue with the base rules if the file
 // is not there or loads empty. Parse errors are *always* bad.
-func setupRules(rulesfile string, baserules []*Rule) ([]*Rule, *string) {
-	if rulesfile == "" {
+func setupRules(baserules []*Rule) ([]*Rule, *string) {
+	if corefile == "" && suppfile == "" {
 		return baserules, nil
 	}
-	rules, err := loadRules(rulesfile)
+	var rules []*Rule
+	var err error
+	rules, err = accumRules(baserules, corefile, false)
+	if err == nil {
+		rules, err = accumRules(rules, suppfile, emptyrulesokay)
+		if err == nil {
+			return rules, nil
+		}
+	}
+
 	// Our rule is that if we're going to stall all activity, we're
 	// going to write a warning message about it.
 	// TODO: write it once per problem. This will probably take a
 	// channel.
-	switch {
-	case rules != nil && (len(rules) > 0 || emptyrulesokay):
-		return append(baserules, rules...), nil
-	case os.IsNotExist(err) && emptyrulesokay:
-		return baserules, nil
-	case err != nil:
-		warnf("problem loading rules %s: %s\n", rulesfile, err)
-	default:
-		warnf("empty rules loaded from %s\n", rulesfile)
-	}
-
 	// If the rules fail to load, we panic and stall everything.
+	warnf("problem loading rules %s: %s\n", suppfile, err)
 	return Parse("stall all")
 }
 
@@ -590,7 +609,7 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 	trans.rip, _, _ = net.SplitHostPort(nc.RemoteAddr().String())
 
 	var c *Context
-	rules, e := setupRules(rulesfile, baserules)
+	rules, e := setupRules(baserules)
 	if e != nil || len(rules) == 0 {
 		// something really seriously bad happened here. bail.
 		warnf("PANIC: error parsing minimal ruleset: %s\n", *e)
@@ -714,18 +733,14 @@ func listener(conn net.Listener, listenc chan net.Conn) {
 // Our absurd collection of global settings.
 
 // These settings are turned into rules.
-var failhelo bool
-var failmail bool
-var failrcpt bool
-var faildata bool
 var failgotdata bool
 var fromreject string
 var toaccept string
 var heloreject string
-var dothelo bool
 
 // other settings.
-var rulesfile string
+var suppfile string
+var corefile string
 
 var goslow bool
 var srvname string
@@ -755,23 +770,8 @@ func buildRules() []*Rule {
 	// We never accept blank EHLO/HELO, although smtpd will.
 	fmt.Fprintf(&outbuf, "reject helo-has none\n")
 
-	if failhelo {
-		fmt.Fprintf(&outbuf, "@helo reject all\n")
-	}
-	if failmail {
-		fmt.Fprintf(&outbuf, "@from reject all\n")
-	}
-	if failrcpt {
-		fmt.Fprintf(&outbuf, "@to reject all\n")
-	}
-	if faildata {
-		fmt.Fprintf(&outbuf, "@data reject all\n")
-	}
 	if failgotdata {
 		fmt.Fprintf(&outbuf, "@message reject all\n")
-	}
-	if dothelo {
-		fmt.Fprintf(&outbuf, "reject helo-has nodots\n")
 	}
 
 	// File based rejections.
@@ -834,10 +834,12 @@ reloaded for each new connection and thus can be changed on the fly.
 If -toaccept is active, addresses that do not match something in
 the file are rejected.
 
-Without -allow-empty-rules, a -r file that is missing or empty
+Without -allow-empty, a -s file that is missing or empty
 causes all client commands to get a 4xx temporary failure reply.
-Parse errors in the rule file always cause 4xx temporary failures.
-The rules file is checked and reloaded for each new connection.
+Parse errors in the rule files always cause 4xx temporary failures.
+The rules files are checked and reloaded for each new connection.
+Rules in the -r file take precedence over the rules in the -s file
+if both are defined. Note that -allow-empty never applies to -r, only -s.
 `
 
 func main() {
@@ -846,12 +848,7 @@ func main() {
 	var force bool
 	var tlsConfig tls.Config
 
-	// TODO: I need a better flag handling package because I have so
-	// many of them and the messages are so long.
-	flag.BoolVar(&failhelo, "H", false, "reject all HELO/EHLOs")
-	flag.BoolVar(&failmail, "F", false, "reject all MAIL FROMs")
-	flag.BoolVar(&failrcpt, "T", false, "reject all RCPT TOs")
-	flag.BoolVar(&faildata, "D", false, "reject all DATA commands")
+	// TODO: group these better. Handle these better? Something.
 	flag.BoolVar(&failgotdata, "M", false, "reject all messages after DATA")
 	flag.BoolVar(&goslow, "S", false, "send output to the network slowly (10 characters/sec)")
 	flag.StringVar(&srvname, "helo", "", "server name for greeting banners")
@@ -862,12 +859,12 @@ func main() {
 	flag.StringVar(&hashtype, "save-hash", "all", "what to base the hash name of saved messages on")
 	flag.StringVar(&certfile, "c", "", "TLS PEM certificate file; requires -k too")
 	flag.StringVar(&keyfile, "k", "", "TLS PEM key file; requires -c too")
-	flag.BoolVar(&dothelo, "dothelo", false, "require EHLO/HELO to contain a '.' or a ':'")
 	flag.StringVar(&fromreject, "fromreject", "", "file of address patterns to reject in MAIL FROMs")
 	flag.StringVar(&toaccept, "toaccept", "", "file of address patterns to accept in RCPT TOs")
 	flag.StringVar(&heloreject, "heloreject", "", "file of hostname patterns to reject in EHLOs")
-	flag.StringVar(&rulesfile, "r", "", "file of additional control rules")
-	flag.BoolVar(&emptyrulesokay, "allow-empty-rules", false, "keep going with an empty or missing -r file")
+	flag.StringVar(&corefile, "r", "", "file of core control rules (if set cannot be missing or empty)")
+	flag.StringVar(&suppfile, "s", "", "file of supplementary control rules")
+	flag.BoolVar(&emptyrulesokay, "allow-empty", false, "keep going with an empty or missing -s file")
 
 	flag.Usage = Usage
 
@@ -879,7 +876,7 @@ func main() {
 	}
 	// This is theoretically too pessimistic in the face of a rules file,
 	// but in that case you can give --force-receive. So.
-	if savedir == "" && !(force || failhelo || failmail || failrcpt || faildata || failgotdata) {
+	if savedir == "" && !(force || failgotdata) {
 		die("I refuse to accept email without either a -d savedir or --force-receive\n")
 	}
 	if hashtype == "msg" && logfile == "" {
