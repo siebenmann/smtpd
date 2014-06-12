@@ -321,6 +321,9 @@ func (p *Parser) pRule() (r *Rule, err *string) {
 	if err != nil {
 		return nil, err
 	}
+	if p.currule.expr == nil {
+		return nil, p.genError("rule needs at least one operation, perhaps 'all'")
+	}
 	if p.isEol() {
 		p.consume()
 		if p.currule.deferto != pAny &&

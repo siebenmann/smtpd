@@ -72,6 +72,12 @@ type Context struct {
 	// the action
 	deferred Action
 
+	// Track the phase and whether we need to reset anything if
+	// we experience some sort of reset. Normally we don't and
+	// can just sail on.
+	last     Phase // the last phase we processed rules in
+	deferhit bool
+
 	// A map of loaded files. Files are loaded as lists. An empty
 	// list means the file could not be loaded.
 	// This is used to avoid redundant reloading of files across
@@ -276,6 +282,11 @@ func matchHost(host string, pat string) bool {
 
 // ----
 
+// A RSET only comes from repeating an EHLO or a MAIL FROM.
+func isRset(ph Phase, c *Context) bool {
+	return ph <= pMfrom && ph <= c.last
+}
+
 //
 // Decide what to do in a given phase in a context, with evt being
 // the event for the phase (we pull the command argument and the
@@ -297,9 +308,20 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 		c.rcptto = evt.Arg
 	}
 
+	// Handle resets if necessary. Resets clear any set markers in
+	// rules that need to match at RCPT TO time but defer their results
+	// to DATA or post-DATA.
+	if isRset(ph, c) && c.deferhit {
+		for _, r := range c.ruleset {
+			r.deferhit = false
+		}
+		c.deferhit = false
+	}
+
 	var ret Action
 	ret = aNoresult
-	//fmt.Printf("running in %s\n", ph)
+	//fmt.Printf("running in %s (old %s)\n", ph, c.last)
+	c.last = ph
 
 	for _, r := range c.ruleset {
 		// Try to determine if we can run this rule.
@@ -310,20 +332,27 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 			// the rule's basic requirements mean we can't
 			// satisfy it yet. skip.
 			continue
-		case r.deferto != pAny && r.deferto > ph:
-			// we could satisfy the rule's requirements but it
-			// wants to be deferred until later. skip.
+
+		case r.deferto > pRto && ph == pRto && rp == pRto:
+			// OH AUGH I HATE MY LIFE.
+			// This rule defers to after RCPT TO but depends
+			// on RCPT TO data, so it must be matched against
+			// each RCPT TO now (while that data is available)
+			// but any successful results from it remembered
+			// until later.
+
+		case r.deferto > ph:
+			// This is a simple deferred rule that is not ready
+			// yet. We can run it when its time comes up.
 			continue
 
 			// Things we still have to process now:
-		case rr <= aAccept:
+		case rr <= aAccept || r.deferto == ph:
 			// Accept rules must always be checked because
 			// they don't block us from continuing.
 			// (so we do 'pass' here)
-
-		case r.deferto == ph:
-			// A rule that has been defered to now must be
-			// processed now regardless of its requires.
+			// If we've hit the phase for a deferto rule,
+			// it has to run.
 
 			// Final skip case:
 		case (rp == pAny && ph > pHelo) || (rp != pAny && rp < ph):
@@ -335,19 +364,48 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 		}
 
 		//fmt.Printf("evaling: %v", r)
+
+		// Surface a deferred rule that we had to actually match
+		// in an earlier phase.
+		// Handling delayed deferred rules inline here means that
+		// they work right relative to other rules. Consider:
+		//	@data accept all
+		//	@data reject from info@fbi.gov to a@b
+		// The second rule must be matched during pRto, but
+		// when @data time comes the first rule will preempt it
+		// under the standard 'first match wins' rules.
+		if r.deferto == ph && r.deferhit {
+			ret = r.result
+			//fmt.Printf(" matched (deferhit set) and: %v\n", ret)
+			break
+		}
+
 		c.rulemiss = false
 		res := r.expr.Eval(c)
 		if c.rulemiss {
 			//fmt.Printf(" ... rulemiss set, skip\n")
 			continue
 		}
-		if res {
-			ret = r.result
-			//fmt.Printf(" matched and: %v\n", ret)
-			break
+		if !res {
+			//fmt.Printf("\n")
+			continue
 		}
-		//fmt.Printf("\n")
+		// Some deferred rules must match early, while needed
+		// data is available, but only surface their success
+		// later at their proper time. If we are dealing with
+		// such a rule (signalled by it running before it should)
+		// mark it as succeeding but otherwise pretend it doesn't
+		// exist now.
+		if r.deferto > ph {
+			r.deferhit = true
+			c.deferhit = true
+			//fmt.Printf(" ... setting deferhit\n")
+			continue
+		}
 
+		ret = r.result
+		//fmt.Printf(" matched and: %v\n", ret)
+		break
 	}
 
 	// Handle deferred results due to MAIL FROM:<>.

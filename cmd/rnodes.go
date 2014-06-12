@@ -82,9 +82,16 @@ type Result bool
 type Rule struct {
 	// Rule cannot be evaluated until this phase; at most Rto right now.
 	requires Phase
+	result   Action
 
 	deferto Phase // Rule result is deferred until this phase
-	result  Action
+
+	// Some rules want to defer to stages where data for them is
+	// not actually still available, eg a rule involving RCPT TOs
+	// that defers until @data; if executed at @data time, it will
+	// only see the last RCPT TO. To deal with this we store the
+	// hit state here if it happens.
+	deferhit bool
 
 	expr Expr // expression to evaluate
 }
