@@ -23,7 +23,7 @@ accept dns good
 reject dns noforward,inconsistent
 
 # test all options for comma-separated things.
-accept dns good or dns noforward,inconsistent,nodns
+accept dns good or dns noforward,inconsistent,nodns or dns exists
 accept tls on or tls off
 accept from-has unqualified,route,quoted,noat,garbage,bad
 accept to-has unqualified,route,quoted,noat,garbage,bad
@@ -77,6 +77,7 @@ accept not (from jim@ to @logan)
 # dns is not good because there are inconsistent and noforward stuff
 accept not dns good
 accept helo .ben
+accept not helo-has bareip
 `
 
 var aList = `# This is a comment

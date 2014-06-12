@@ -11,7 +11,7 @@
 //	from-has ADDR-OPTIONS, to-has ADDR-OPTIONS
 //	helo-has helo,ehlo,none,nodots,bareip
 //	tls on|off, host HOST
-//	dns nodns,inconsistent,noforward,good
+//	dns nodns,inconsistent,noforward,good,exists
 //      all
 // ADDR-OPTIONS: unqualified,route,quoted,noat,garbage,bad
 // *-OPTIONS are or'd together. 'bad' is all but 'quoted'.
@@ -45,6 +45,7 @@ package main
 import (
 	//"fmt"
 	"github.com/siebenmann/smtpd"
+	"net"
 	"strings"
 )
 
@@ -97,8 +98,7 @@ func newContext(trans *smtpTransaction, rules []*Rule) *Context {
 	return c
 }
 
-// This is currently a hack, as we load a map then turn it into a list
-// when we could just load a list. And probably should.
+// We pull the list out of c.files if it's already loaded.
 func (c *Context) getMatchList(a string) []string {
 	var fname string
 	switch {
@@ -127,6 +127,10 @@ func (c *Context) getMatchList(a string) []string {
 func dnsGetter(c *Context) (o Option) {
 	if len(c.trans.rdns.verified) == 0 {
 		o |= oNodns
+	} else {
+		// yes, yes, this is just 'not dns nodns'. So what?
+		// It's convenient.
+		o |= oExists
 	}
 	if len(c.trans.rdns.nofwd) > 0 {
 		o |= oNofwd
@@ -157,6 +161,9 @@ func heloGetter(c *Context) (o Option) {
 	if idx1 == -1 && idx2 == -1 {
 		o |= oNodots
 	}
+	if i := net.ParseIP(c.heloname); i != nil {
+		o |= oBareip
+	}
 	return
 }
 
@@ -168,9 +175,7 @@ func getAddrOpts(a string) (o Option) {
 	}
 	idx := strings.IndexByte(a, '@')
 	if idx == -1 {
-		// an address without a domain automatically has an
-		// unqualified domain too.
-		o |= oNoat | oUnqualified
+		o |= oNoat
 	} else {
 		// We don't necessarily do everything right in the presence
 		// of route addresses.
@@ -383,14 +388,16 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 	}
 
 	// Handle deferred results due to MAIL FROM:<>.
-	// We only switch to the deferred result if it is more strict
-	// than the result we've determined now.
+	// We replace the determined result regardless of what it
+	// is, even if the deferred MAIL FROM:<> was a stall and the
+	// result now is a reject, because that's what your rules said
+	// to do.
 	// We don't clear c.deferred because this result is now sticky;
 	// it must apply to all RCPT TOs from now on. If the connection
 	// is RSET, the result will be cleared in our initial section.
 	// Implicity ph >= pRto, really ph == pRto, because we only set
 	// c.deferred in pMfrom.
-	if c.deferred > ret {
+	if c.deferred > aAccept {
 		ret = c.deferred
 	}
 

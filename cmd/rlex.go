@@ -113,6 +113,7 @@ const (
 	itemOn
 	itemOff
 	itemGood
+	itemExists
 
 	// highest keyword, well, one larger than it.
 	itemMaxItem
@@ -162,6 +163,7 @@ var keywords = map[string]itemType{
 	"on":           itemOn,
 	"off":          itemOff,
 	"good":         itemGood,
+	"exists":       itemExists,
 }
 
 const eof = -1

@@ -67,6 +67,7 @@ const (
 	oInconsist
 	oNofwd
 	oGood
+	oExists
 
 	// address options
 	oUnqualified

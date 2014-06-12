@@ -153,7 +153,7 @@ var heloMap = map[itemType]Option{
 }
 var dnsMap = map[itemType]Option{
 	itemNodns: oNodns, itemInconsistent: oInconsist, itemNoforward: oNofwd,
-	itemGood: oGood,
+	itemGood: oGood, itemExists: oExists,
 }
 var addrMap = map[itemType]Option{
 	itemUnqualified: oUnqualified, itemRoute: oRoute, itemQuoted: oQuoted,
