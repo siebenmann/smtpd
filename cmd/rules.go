@@ -1,4 +1,8 @@
 //
+// Core of implementing command processing rules.
+// The documentation below may be out of date. See 'RULES' in this
+// directory for the more canonical documentation.
+//
 // Processing rules:
 // [phase] accept|reject|stall RULE ....
 //
