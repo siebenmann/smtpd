@@ -62,11 +62,26 @@ func (p *Parser) genError(msg string) *string {
 	case itemEOL:
 		fnd = "unexpected end of line"
 	case itemError:
+		// the real problem is that we hit a lexing error;
+		// the msg we've been passed in is basically irrelevant.
 		fnd = "lexing error: " + p.curtok.val
+		s := fmt.Sprintf("at line %d char %d: lexing error: %s",
+			ln, lp, p.curtok.val)
+		return &s
 	default:
-		fnd = p.curtok.val
+		fnd = fmt.Sprintf("'%s'", p.curtok.val)
 	}
-	s := fmt.Sprintf("at line %d char %d: %s: found '%s'", ln, lp, msg, fnd)
+	s := fmt.Sprintf("at line %d char %d: %s: found %s", ln, lp, msg, fnd)
+	return &s
+}
+func (p *Parser) lineError(msg string) *string {
+	ln, _ := p.l.lineInfo(p.curtok.pos)
+	s := fmt.Sprintf("at line %d: %s", ln, msg)
+	return &s
+}
+func (p *Parser) posError(msg string) *string {
+	ln, lp := p.l.lineInfo(p.curtok.pos)
+	s := fmt.Sprintf("at line %d char %d: %s", ln, lp, msg)
 	return &s
 }
 
@@ -93,7 +108,7 @@ func (p *Parser) pParen() (expr Expr, err *string) {
 		return nil, p.genError("expecting closing ')'")
 	}
 	if er == nil {
-		return nil, p.genError("empty parenthesized expression")
+		return nil, p.posError("empty parenthesized expression")
 	}
 	p.consume()
 	return er, err
@@ -117,7 +132,7 @@ func (p *Parser) pOnOff() (on bool, err *string) {
 		p.consume()
 		return false, nil
 	default:
-		return false, p.genError("expected on or off")
+		return false, p.posError("expected on or off")
 	}
 }
 
@@ -267,7 +282,7 @@ func (p *Parser) pOrl() (expr Expr, err *string) {
 		return er, err
 	}
 	if er == nil {
-		return nil, p.genError("empty left side of an or")
+		return nil, p.posError("empty left side of an or")
 	}
 	exp.left = er
 	p.consume()
@@ -276,7 +291,7 @@ func (p *Parser) pOrl() (expr Expr, err *string) {
 		return nil, err
 	}
 	if er == nil {
-		return nil, p.genError("empty right side of an OR")
+		return nil, p.posError("empty right side of an OR")
 	}
 	exp.right = er
 	return exp, err
@@ -322,18 +337,20 @@ func (p *Parser) pRule() (r *Rule, err *string) {
 		return nil, err
 	}
 	if p.currule.expr == nil {
-		return nil, p.genError("rule needs at least one operation, perhaps 'all'")
+		return nil, p.lineError("rule needs at least one operation, perhaps 'all'")
 	}
 	if p.isEol() {
-		p.consume()
+		// we check for errors before consuming the EOL so that
+		// the line numbers come out right in error messages.
 		if p.currule.deferto != pAny &&
 			p.currule.deferto < p.currule.requires {
-			return nil, p.genError("rule specifies a phase lower than its operations require, does not make sense")
+			return nil, p.lineError("rule specifies a phase lower than its operations require, does not make sense")
 		}
 		// remove trivial root of 'defer to now'.
 		if p.currule.deferto == p.currule.requires {
 			p.currule.deferto = pAny
 		}
+		p.consume()
 		return p.currule, err
 	} else {
 		return nil, p.genError("expecting end of line")

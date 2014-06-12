@@ -303,6 +303,7 @@ func lexSpecial(l *lexer) stateFn {
 		// generates explicit tokens and so will throw a parse
 		// error.
 		if n == ' ' || n == '\t' {
+			l.backup()
 			return l.errorf("comma followed by whitespace")
 		} else {
 			return lexLineRunning
