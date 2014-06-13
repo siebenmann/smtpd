@@ -280,11 +280,7 @@ func accumRules(baserules []*Rule, fname string) ([]*Rule, error) {
 // If there are any errors in loading or parsing the rules files, we
 // use the rules system itself to return a single rule that will defer
 // everything.
-//
-// Our contract is that we return an error string pointer only if
-// the panic stall rules fail to parse for some reason. Thus any
-// error return from setupRules() is a *really* fatal problem.
-func setupRules(baserules []*Rule) ([]*Rule, error) {
+func setupRules(baserules []*Rule) ([]*Rule, bool) {
 	var rules []*Rule
 	var rfile string
 	var err error
@@ -297,7 +293,7 @@ func setupRules(baserules []*Rule) ([]*Rule, error) {
 		}
 	}
 	if err == nil {
-		return rules, nil
+		return rules, true
 	}
 
 	// Our rule is that if we're going to stall all activity, we're
@@ -305,52 +301,76 @@ func setupRules(baserules []*Rule) ([]*Rule, error) {
 	// If the rules fail to load, we panic and stall everything via
 	// the simple mechanism of generating a 'stall all' set of rules.
 	warnonce("problem loading rules %s: %s\n", rfile, err)
-	return Parse("stall all")
+	return stallall, false
 }
 
 // ----
 
-// This is a blacklist of IPs that have TLS problems when talking to
-// us. If an IP is present and is more recent than tlsTimeout (3 days),
-// we don't advertise TLS to them even if we could.
+// Support for IP blacklists. We have two.
+//
+// notls is a blacklist of IPs that have TLS problems when talking to
+// us. If an IP is present and is more recent than tlsTimeout (3
+// days), we don't advertise TLS to them even if we could.
+//
+// yakkers is a blacklist of people who have made too many connections
+// to us that they didn't do anything meaningful with within a certain
+// period of time. Implicitly this is yakTimeout. Yakkers get a 'stall
+// all' timeout.
+
 const tlsTimeout = time.Hour * 72
+const yakTimeout = time.Hour * 6
+const yakCount = 5
 
-var ipmap = struct {
+type ipEnt struct {
+	when  time.Time
+	count int
+}
+type ipMap struct {
 	sync.RWMutex
-	ips map[string]time.Time
-}{ips: make(map[string]time.Time)}
+	ips map[string]*ipEnt
+}
 
-// add an IP to the IP map, with the current time
-func ipAdd(ip string) {
+var notls = &ipMap{ips: make(map[string]*ipEnt)}
+var yakkers = &ipMap{ips: make(map[string]*ipEnt)}
+
+// We must take a TTL because we want to annul the count of existing
+// but stale entries. Right now this only matters for yakkers, which
+// is the only thing that cares about counts.
+func (i *ipMap) Add(ip string, ttl time.Duration) {
 	if ip == "" {
 		return
 	}
-	ipmap.Lock()
-	ipmap.ips[ip] = time.Now()
-	ipmap.Unlock()
-}
-
-// delete an IP from the map if present
-func ipDel(ip string) {
-	ipmap.Lock()
-	delete(ipmap.ips, ip)
-	ipmap.Unlock()
-}
-
-// is an IP present (and non-stale) in the map?
-func ipPresent(ip string) bool {
-	ipmap.RLock()
-	t := ipmap.ips[ip]
-	ipmap.RUnlock()
-	if t.IsZero() {
-		return false
+	i.Lock()
+	t := i.ips[ip]
+	switch {
+	case t == nil:
+		t = &ipEnt{}
+		i.ips[ip] = t
+	case time.Now().Sub(t.when) >= ttl:
+		t.count = 0
 	}
-	if time.Now().Sub(t) < tlsTimeout {
-		return true
+	t.count += 1
+	t.when = time.Now()
+	i.Unlock()
+}
+
+func (i *ipMap) Del(ip string) {
+	i.Lock()
+	delete(i.ips, ip)
+	i.Unlock()
+}
+func (i *ipMap) Lookup(ip string, ttl time.Duration) (bool, int) {
+	i.RLock()
+	t := i.ips[ip]
+	i.RUnlock()
+	if t == nil {
+		return false, 0
+	}
+	if time.Now().Sub(t.when) < ttl {
+		return true, t.count
 	} else {
-		// Entry is stale, purge.
-		ipDel(ip)
-		return false
+		i.Del(ip)
+		return false, 0
 	}
 }
 
@@ -602,7 +622,9 @@ func decider(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id st
 func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtplog io.Writer, baserules []*Rule) {
 	var evt smtpd.EventInfo
 	var convo *smtpd.Conn
+	var logger *smtpLogger
 	var l2 io.Writer
+	var gotsomewhere, stall bool
 
 	defer nc.Close()
 
@@ -613,17 +635,28 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	trans.rip, _, _ = net.SplitHostPort(nc.RemoteAddr().String())
 
 	var c *Context
-	rules, e := setupRules(baserules)
-	if e != nil || len(rules) == 0 {
-		// something really seriously bad happened here. bail.
-		warnf("PANIC: error parsing minimal ruleset: %v\n", e)
-		return
-	}
-	c = newContext(trans, rules)
-	//fmt.Printf("rules are:\n%+v\n", rules)
+	// nit: in the presence of yakkers, we must know whether or not
+	// the rules are good because bad rules turn *everyone* into
+	// yakkers (since they prevent clients from successfully EHLO'ing).
+	rules, rulesgood := setupRules(baserules)
 
-	if smtplog != nil {
-		logger := &smtpLogger{}
+	// A yakker is a client that is repeatedly connecting to us
+	// without doing anything successfully. After a certain number
+	// of attempts we turn them off. We only do this if we're logging
+	// SMTP commands; if we're not logging, we don't care.
+	// This is kind of a hack, but this code is for Chris and this is
+	// what Chris cares about.
+	hit, cnt := yakkers.Lookup(trans.rip, yakTimeout)
+	if hit && cnt > yakCount && smtplog != nil {
+		c = newContext(trans, stallall)
+		stall = true
+	} else {
+		c = newContext(trans, rules)
+	}
+	//fmt.Printf("rules are:\n%+v\n", c.ruleset)
+
+	if smtplog != nil && !stall {
+		logger = &smtpLogger{}
 		logger.prefix = []byte(prefix)
 		logger.writer = bufio.NewWriterSize(smtplog, 8*1024)
 		l2 = logger
@@ -647,10 +680,13 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	}
 	convo = smtpd.NewConn(nc, sname, l2)
 	convo.SayTime = true
-	if goslow {
+	// stalled conversations are always slow, even if -S is not set.
+	// TODO: make them even slower than this? I probably don't care.
+	if goslow || stall {
 		convo.AddDelay(time.Second / 10)
 	}
-	if len(certs) > 0 && !ipPresent(trans.rip) {
+	blocktls, _ := notls.Lookup(trans.rip, tlsTimeout)
+	if len(certs) > 0 && !blocktls {
 		var tlsc tls.Config
 		tlsc.Certificates = certs
 		tlsc.ClientAuth = tls.VerifyClientCertIfGiven
@@ -681,6 +717,9 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 				trans.hash = ""
 				trans.bodyhash = ""
 				trans.rcptto = []string{}
+				// this connection succeeded at some
+				// command.
+				gotsomewhere = true
 			case smtpd.MAILFROM:
 				if decider(pMfrom, evt, c, convo, "") {
 					continue
@@ -719,11 +758,30 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 		case smtpd.TLSERROR:
 			// any TLS error means we'll avoid offering TLS
 			// to this source IP for a while.
-			ipAdd(trans.rip)
+			notls.Add(trans.rip, tlsTimeout)
 		}
 		if evt.What == smtpd.DONE || evt.What == smtpd.ABORT {
 			break
 		}
+	}
+	// if the client did not issue any successful meaningful commands,
+	// remember this. we squelch people who yak too long.
+	// Once people are yakkers we don't count their continued failure
+	// to do anything against them.
+	// And we have to have good rules to start with because duh.
+	switch {
+	case !gotsomewhere && !stall && rulesgood:
+		yakkers.Add(trans.rip, yakTimeout)
+		// See if this transaction has pushed the client over the
+		// edge to becoming a yakker. If so, report it to the SMTP
+		// log.
+		hit, cnt = yakkers.Lookup(trans.rip, yakTimeout)
+		if hit && cnt > yakCount && smtplog != nil {
+			s := fmt.Sprintf("! %s added as a yakker at hit %d\n", trans.rip, cnt)
+			logger.Write([]byte(s))
+		}
+	case gotsomewhere:
+		yakkers.Del(trans.rip)
 	}
 }
 
@@ -809,6 +867,20 @@ func buildRules() []*Rule {
 		die("error parsing autogenerated rules:\n\t%v\nrules:\n%s", err, s)
 	}
 	return rules
+}
+
+// Pre-generating the 'stall all' rule means that the main processing
+// code can use it without having to check all the time if something
+// went wrong while parsing it into actual rules.
+var stallall []*Rule
+
+func genStallRules() {
+	var err error
+	stallall, err = Parse("stall all")
+	if err != nil || len(stallall) == 0 {
+		// Should never happen.
+		die("error parsing autogenerated nil rules:\n\t%v\n", err)
+	}
 }
 
 func Usage() {
@@ -939,6 +1011,7 @@ func main() {
 	}
 
 	baserules := buildRules()
+	genStallRules()
 
 	// Set up a pool of listeners, one per address that we're supposed
 	// to be listening on. These are goroutines that multiplex back to
