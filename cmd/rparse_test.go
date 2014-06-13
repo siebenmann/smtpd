@@ -34,7 +34,7 @@ accept helo-has helo,ehlo,none,nodots,bareip
 func TestParse(t *testing.T) {
 	rules, err := Parse(aParse + allSuccess)
 	if err != nil {
-		t.Fatalf("Error reported: %s\n", *err)
+		t.Fatalf("Error reported: %s\n", err)
 	}
 	if len(rules) == 0 {
 		t.Fatalf("No parse error but nothing found")
@@ -44,7 +44,7 @@ func TestParse(t *testing.T) {
 		rls, err := Parse(r1)
 		if err != nil || len(rls) != 1 {
 			t.Fatalf("round tripping: %s\nerr: %s\nrules: %+v\n",
-				r1, *err, rls)
+				r1, err, rls)
 		}
 		r2 := stringRule(rls[0])
 		if r2 != r1 {
@@ -118,7 +118,7 @@ func TestSuccess(t *testing.T) {
 	c := setupContext(t)
 	rules, err := Parse(allSuccess)
 	if err != nil {
-		t.Fatalf("error reported %s\n", *err)
+		t.Fatalf("error reported %s\n", err)
 	}
 	for i := range rules {
 		res := rules[i].expr.Eval(c)

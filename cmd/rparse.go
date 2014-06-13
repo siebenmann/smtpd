@@ -7,6 +7,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -53,7 +54,7 @@ func (p *Parser) isEol() bool {
 	return p.curtok.typ == itemEOL || p.curtok.typ == itemEOF
 }
 
-func (p *Parser) genError(msg string) *string {
+func (p *Parser) genError(msg string) error {
 	ln, lp := p.l.lineInfo(p.curtok.pos)
 	var fnd string
 	switch p.curtok.typ {
@@ -67,25 +68,25 @@ func (p *Parser) genError(msg string) *string {
 		fnd = "lexing error: " + p.curtok.val
 		s := fmt.Sprintf("at line %d char %d: lexing error: %s",
 			ln, lp, p.curtok.val)
-		return &s
+		return errors.New(s)
 	default:
 		fnd = fmt.Sprintf("'%s'", p.curtok.val)
 	}
-	s := fmt.Sprintf("at line %d char %d: %s: found %s", ln, lp, msg, fnd)
-	return &s
+	s := fmt.Sprintf("at line %d char %d: %s, found %s", ln, lp, msg, fnd)
+	return errors.New(s)
 }
-func (p *Parser) lineError(msg string) *string {
+func (p *Parser) lineError(msg string) error {
 	ln, _ := p.l.lineInfo(p.curtok.pos)
 	s := fmt.Sprintf("at line %d: %s", ln, msg)
-	return &s
+	return errors.New(s)
 }
-func (p *Parser) posError(msg string) *string {
+func (p *Parser) posError(msg string) error {
 	ln, lp := p.l.lineInfo(p.curtok.pos)
 	s := fmt.Sprintf("at line %d char %d: %s", ln, lp, msg)
-	return &s
+	return errors.New(s)
 }
 
-func (p *Parser) pNot() (expr Expr, err *string) {
+func (p *Parser) pNot() (expr Expr, err error) {
 	p.consume()
 	exr := &NotN{}
 	exr.node, err = p.pTerm()
@@ -98,7 +99,7 @@ func (p *Parser) pNot() (expr Expr, err *string) {
 	return exr, err
 }
 
-func (p *Parser) pParen() (expr Expr, err *string) {
+func (p *Parser) pParen() (expr Expr, err error) {
 	p.consume()
 	er, err := p.pAndl()
 	if err != nil {
@@ -114,7 +115,7 @@ func (p *Parser) pParen() (expr Expr, err *string) {
 	return er, err
 }
 
-func (p *Parser) pArg() (arg string, err *string) {
+func (p *Parser) pArg() (arg string, err error) {
 	if p.curtok.typ < itemHasValue {
 		return "", p.genError("expected argument")
 	}
@@ -123,7 +124,7 @@ func (p *Parser) pArg() (arg string, err *string) {
 	return
 }
 
-func (p *Parser) pOnOff() (on bool, err *string) {
+func (p *Parser) pOnOff() (on bool, err error) {
 	switch p.curtok.typ {
 	case itemOn:
 		p.consume()
@@ -165,7 +166,7 @@ var mapMap = map[itemType]map[itemType]Option{
 	itemDns:     dnsMap,
 }
 
-func (p *Parser) pCommaOpts(m map[itemType]Option) (opt Option, err *string) {
+func (p *Parser) pCommaOpts(m map[itemType]Option) (opt Option, err error) {
 	for {
 		ct := p.curtok.typ
 		if m[ct] == oZero {
@@ -182,7 +183,7 @@ func (p *Parser) pCommaOpts(m map[itemType]Option) (opt Option, err *string) {
 	return opt, nil
 }
 
-func (p *Parser) pTerm() (expr Expr, err *string) {
+func (p *Parser) pTerm() (expr Expr, err error) {
 	ct := p.curtok.typ
 	if ct == itemNot {
 		return p.pNot()
@@ -248,7 +249,7 @@ func (p *Parser) pTerm() (expr Expr, err *string) {
 }
 
 // We cheat by not recursing and simply looping.
-func (p *Parser) pAndl() (expr Expr, err *string) {
+func (p *Parser) pAndl() (expr Expr, err error) {
 	exp := &AndL{}
 	for {
 		er, err := p.pOrl()
@@ -272,7 +273,7 @@ func (p *Parser) pAndl() (expr Expr, err *string) {
 	}
 }
 
-func (p *Parser) pOrl() (expr Expr, err *string) {
+func (p *Parser) pOrl() (expr Expr, err error) {
 	exp := &OrN{}
 	er, err := p.pTerm()
 	if err != nil {
@@ -318,7 +319,7 @@ var actions = map[itemType]Action{
 	itemAccept: aAccept, itemReject: aReject, itemStall: aStall,
 }
 
-func (p *Parser) pRule() (r *Rule, err *string) {
+func (p *Parser) pRule() (r *Rule, err error) {
 	p.currule = &Rule{}
 	// bail if we are sitting on an EOF.
 	if p.curtok.typ == itemEOF {
@@ -353,12 +354,16 @@ func (p *Parser) pRule() (r *Rule, err *string) {
 		p.consume()
 		return p.currule, err
 	} else {
-		return nil, p.genError("expecting end of line")
+		// This is technically 'expecting end of line' but that
+		// is not a useful error. What it really means is that
+		// we ran into something that is not an operation down
+		// in the depths of stuff and it bubbled up to here.
+		return nil, p.genError("expecting an operation")
 	}
 }
 
 // a file is a sequence of rules.
-func (p *Parser) pFile() (rules []*Rule, err *string) {
+func (p *Parser) pFile() (rules []*Rule, err error) {
 	for {
 		r, e := p.pRule()
 		if e != nil {
@@ -374,7 +379,7 @@ func (p *Parser) pFile() (rules []*Rule, err *string) {
 	return rules, nil
 }
 
-func Parse(input string) (rules []*Rule, err *string) {
+func Parse(input string) (rules []*Rule, err error) {
 	l := lex(input)
 	p := &Parser{l: l}
 	p.curtok = l.nextItem()
