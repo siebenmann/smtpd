@@ -18,6 +18,9 @@
 //             first.
 // -S: slow; send all server replies out to the network at a rate of one
 //     character every tenth of a second.
+// -noyakkers: if a client repeatedly connects but doesn't get as far as
+//     successfully EHLO'ing, mark them as a 'yakker'. Yakkers get 4xx
+//     responses to everything and their SMTP commands aren't logged.
 //
 // -c FILE, -k FILE: provide TLS certificate and private key to enable TLS.
 //                   Both files must be PEM encoded. Self-signed is fine.
@@ -648,6 +651,8 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	// what Chris cares about.
 	hit, cnt := yakkers.Lookup(trans.rip, yakTimeout)
 	if hit && cnt > yakCount && smtplog != nil {
+		// nit: if the rules are bad and we're stalling anyways,
+		// yakkers still have their SMTP transactions not logged.
 		c = newContext(trans, stallall)
 		stall = true
 	} else {
@@ -770,7 +775,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	// to do anything against them.
 	// And we have to have good rules to start with because duh.
 	switch {
-	case !gotsomewhere && !stall && rulesgood:
+	case !gotsomewhere && !stall && rulesgood && noyakkers:
 		yakkers.Add(trans.rip, yakTimeout)
 		// See if this transaction has pushed the client over the
 		// edge to becoming a yakker. If so, report it to the SMTP
@@ -811,6 +816,7 @@ var goslow bool
 var srvname string
 var savedir string
 var hashtype string
+var noyakkers bool
 
 func openlogfile(fname string) (outf io.Writer, err error) {
 	if fname == "" {
@@ -916,6 +922,11 @@ the file are rejected.
 Control rule files are reloaded for each new connection. Any errors
 in this process cause the connection to defer all commands with a
 421 response (because sinksmtp can't safely do anything else).
+
+A yakker is a client that connects repeatedly within a certain amount
+of time but never manages a successful EHLO/HELO. Such clients are
+stalled with 4xx responses to everything and their SMTP transactions
+are not logged. -noyakkers is only meaningful if -smtplog is set.
 `
 
 func main() {
@@ -939,6 +950,7 @@ func main() {
 	flag.StringVar(&toaccept, "toaccept", "", "file of address patterns to accept in RCPT TOs")
 	flag.StringVar(&heloreject, "heloreject", "", "file of hostname patterns to reject in EHLOs")
 	flag.StringVar(&rfiles, "r", "", "comma separated list of files of control rules")
+	flag.BoolVar(&noyakkers, "noyakkers", false, "stall clients that repeatedly don't do anything")
 
 	flag.Usage = Usage
 
