@@ -180,7 +180,7 @@ func die(format string, elems ...interface{}) {
 // Suppress duplicate warning messages by running them all through
 // a channel to a master, which can simply keep track of what the
 // last message was.
-var uniquer chan string // must be set up in main()
+var uniquer = make(chan string)
 
 func warnonce(format string, elems ...interface{}) {
 	s := fmt.Sprintf(format, elems...)
@@ -599,13 +599,7 @@ func decider(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id st
 }
 
 // Process a single connection.
-// We take tlsc as a value instead of a literal because we are going to
-// change it (to set tlsc.ServerName). This causes 'go vet' to complain
-// that we are copying a lock (in an internal field in tls.Config). This
-// is true but it's also the case that we're passing an unused tls.Config
-// in, so the lock should be at its zero value. Right now I decline to make
-// the code more elaborate to pacify 'go vet'.
-func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.Writer, baserules []*Rule) {
+func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtplog io.Writer, baserules []*Rule) {
 	var evt smtpd.EventInfo
 	var convo *smtpd.Conn
 	var l2 io.Writer
@@ -656,7 +650,11 @@ func process(cid int, nc net.Conn, tlsc tls.Config, logf io.Writer, smtplog io.W
 	if goslow {
 		convo.AddDelay(time.Second / 10)
 	}
-	if len(tlsc.Certificates) > 0 && !ipPresent(trans.rip) {
+	if len(certs) > 0 && !ipPresent(trans.rip) {
+		var tlsc tls.Config
+		tlsc.Certificates = certs
+		tlsc.ClientAuth = tls.VerifyClientCertIfGiven
+		tlsc.SessionTicketsDisabled = true
 		tlsc.ServerName = sname
 		convo.AddTLS(&tlsc)
 	}
@@ -852,7 +850,7 @@ func main() {
 	var smtplogfile, logfile, rfiles string
 	var certfile, keyfile string
 	var force bool
-	var tlsConfig tls.Config
+	var certs []tls.Certificate
 
 	// TODO: group these better. Handle these better? Something.
 	flag.BoolVar(&failgotdata, "M", false, "reject all messages after they're fully received")
@@ -898,9 +896,7 @@ func main() {
 		if err != nil {
 			die("error loading TLS cert from %s & %s: %v\n", certfile, keyfile, err)
 		}
-		tlsConfig.Certificates = []tls.Certificate{cert}
-		tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
-		tlsConfig.SessionTicketsDisabled = true
+		certs = []tls.Certificate{cert}
 
 	case certfile != "":
 		die("certfile specified without keyfile\n")
@@ -957,7 +953,6 @@ func main() {
 	}
 
 	// start up our 'suppress duplicate warnings' backend goroutine
-	uniquer = make(chan string)
 	go warnbackend()
 
 	// Loop around getting new connections from our listeners and
@@ -968,7 +963,7 @@ func main() {
 	cid := 1
 	for {
 		nc := <-listenc
-		go process(cid, nc, tlsConfig, logf, slogf, baserules)
+		go process(cid, nc, certs, logf, slogf, baserules)
 		cid += 1
 	}
 }
