@@ -118,7 +118,7 @@ func (c *Context) getMatchList(a string) []string {
 		return c.files[fname]
 	}
 	l := loadList(fname)
-	if l == nil {
+	if len(l) == 0 {
 		c.files[fname] = []string{}
 		return c.files[fname]
 	}
@@ -201,6 +201,10 @@ func getAddrOpts(a string) (o Option) {
 	// Look for trailing craziness
 	lp := len(a) - 1
 	if a[0] == '<' || a[lp] == '>' || a[lp] == '"' || a[lp] == ']' || a[lp] == '.' || idx == lp {
+		o |= oGarbage
+	}
+	// general crazy things
+	if strings.Contains(a, "..") || strings.Contains(a, "@@") {
 		o |= oGarbage
 	}
 
