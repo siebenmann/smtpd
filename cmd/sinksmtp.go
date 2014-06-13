@@ -31,11 +31,16 @@
 //         be given probably-unique hash-based names. May be combined
 //         with -M, in which case messages will be logged then refused.
 //         If there already is a file with the same hash-based name, we
-//         don't save over top of it. You probably want -l too.
-//         The saved data includes message metadata.
+//         deliberately don't save over top of it (and don't generate any
+//         errors). You probably want -l too. The saved data includes
+//         message metadata.
 // -save-hash TYPE: Base the hash name on one of three things. See HASH
 //         NAMING later. Valid types are 'msg', 'full', and 'all'.
 // -force-receive: accept email messages even without a -d (or a -M).
+//
+// -r FILE[,FILE2,...]
+//	Use FILE et al as control rules files. Rules in earlier files take
+//	priority over rules in later files.
 //
 // A message's hash-based name normally includes everything saved in
 // the save file, including message metadata and thus including the
@@ -43,12 +48,22 @@
 // mostly unique log id. This will normally give all messages a different
 // hash even if the email is identical.
 //
+// Discussion of control rules are beyond the scope of this
+// already-too-long documentation; see the RULES file. Explicitly set
+// command line options take priority over rules.
+//
+// There are also some convenience options for common rule needs.
+// These are:
 // -fromreject FILE: reject any MAIL FROM that matches something
 //         in this address list file.
 // -toaccept FILE: only accept RCPT TO addresses that match something
-//         in this address list file.
+//         in this address list file (if it exists and is non-empty).
 // -heloreject FILE: reject any EHLO/HELO name that matches something in
 //         in this host list file.
+//
+// NOTE: the filenames here should not have funny characters in them
+// such as whitespace or commas; otherwise you'll probably get internal
+// errors or at least odd actions.
 //
 // Address lists are reloaded from scratch every time we start a new
 // connection. It is valid for them to not exist; this is the same as
@@ -69,20 +84,12 @@
 // with no leading dots matches that name; a name with a starting '.'
 // matches that name or any subdomains of it.
 //
-// -r FILE: use FILE as a core rules file. Core rules are checked
-//          before -s FILE rules and this file can't be missing or
-//          empty of rules.
-// -s FILE: use FILE as an additional rules file.
-// -allow-empty: if the rules file fails to load or is empty,
-//          sinksmtp normally 4xx's all commands. This allows it to
-//          proceeed as normal.
-//
-
-// Discussion of rules are beyond the scope of this already-too-long
-// documentation.  Explicitly set command line options take priority
-// over rules.
-// (Internally, all of the command line options themselves create
-// rules and these rules are evaluated before any in your -r/-s files.)
+// Internally these options are compiled into control rules and
+// then checked before any rules in -r files. They are equivalent
+// to:
+//	reject from file:<whatever>
+//	reject not to file:<whatever>
+//	@from reject helo file:<whatever>
 //
 // LOG ENTRIES AND SAVE FILES:
 // The format of this information is hopefully obvious.
@@ -136,8 +143,6 @@
 //
 // Note that sinksmtp never exits. You must kill it by hand to shut
 // it down.
-//
-// TODO: needs lots of comments.
 //
 package main
 
@@ -249,23 +254,12 @@ func loadRules(fname string) ([]*Rule, error) {
 }
 
 // our contract is that we always return either real rules or an error.
-func accumRules(baserules []*Rule, fname string, casual bool) ([]*Rule, error) {
+func accumRules(baserules []*Rule, fname string) ([]*Rule, error) {
 	if fname == "" {
 		return baserules, nil
 	}
 	rules, err := loadRules(fname)
-	switch {
-	case err == nil && rules != nil && len(rules) > 0:
-		return append(baserules, rules...), err
-	case err != nil && !(casual && os.IsNotExist(err)):
-		return nil, err
-	case casual && (err == nil || os.IsNotExist(err)):
-		// if we've gotten here, len(rules) == 0
-		return baserules, nil
-	default:
-		// non-casual, no errors, but empty rules
-		return nil, errors.New("empty rule file")
-	}
+	return append(baserules, rules...), err
 }
 
 // Take our base rules from command line options and a possible rules
@@ -276,17 +270,20 @@ func accumRules(baserules []*Rule, fname string, casual bool) ([]*Rule, error) {
 // emptyrulesokay allows us to continue with the base rules if the file
 // is not there or loads empty. Parse errors are *always* bad.
 func setupRules(baserules []*Rule) ([]*Rule, *string) {
-	if corefile == "" && suppfile == "" {
-		return baserules, nil
-	}
 	var rules []*Rule
+	var rfile string
 	var err error
-	rules, err = accumRules(baserules, corefile, false)
-	if err == nil {
-		rules, err = accumRules(rules, suppfile, emptyrulesokay)
-		if err == nil {
-			return rules, nil
+
+	rules = baserules
+	for _, rfile = range rulefiles {
+		rules, err = accumRules(rules, rfile)
+		if err != nil {
+			break
 		}
+	}
+
+	if err == nil {
+		return rules, nil
 	}
 
 	// Our rule is that if we're going to stall all activity, we're
@@ -294,7 +291,7 @@ func setupRules(baserules []*Rule) ([]*Rule, *string) {
 	// TODO: write it once per problem. This will probably take a
 	// channel.
 	// If the rules fail to load, we panic and stall everything.
-	warnf("problem loading rules %s: %s\n", suppfile, err)
+	warnf("problem loading rules %s: %s\n", rfile, err)
 	return Parse("stall all")
 }
 
@@ -739,14 +736,12 @@ var toaccept string
 var heloreject string
 
 // other settings.
-var suppfile string
-var corefile string
+var rulefiles []string
 
 var goslow bool
 var srvname string
 var savedir string
 var hashtype string
-var emptyrulesokay bool
 
 func openlogfile(fname string) (outf io.Writer, err error) {
 	if fname == "" {
@@ -834,22 +829,19 @@ reloaded for each new connection and thus can be changed on the fly.
 If -toaccept is active, addresses that do not match something in
 the file are rejected.
 
-Without -allow-empty, a -s file that is missing or empty
-causes all client commands to get a 4xx temporary failure reply.
-Parse errors in the rule files always cause 4xx temporary failures.
-The rules files are checked and reloaded for each new connection.
-Rules in the -r file take precedence over the rules in the -s file
-if both are defined. Note that -allow-empty never applies to -r, only -s.
+Control rule files are reloaded for each new connection. Any errors
+in this process cause the connection to defer all commands with a
+421 response (because sinksmtp can't safely do anything else).
 `
 
 func main() {
-	var smtplogfile, logfile string
+	var smtplogfile, logfile, rfiles string
 	var certfile, keyfile string
 	var force bool
 	var tlsConfig tls.Config
 
 	// TODO: group these better. Handle these better? Something.
-	flag.BoolVar(&failgotdata, "M", false, "reject all messages after DATA")
+	flag.BoolVar(&failgotdata, "M", false, "reject all messages after they're fully received")
 	flag.BoolVar(&goslow, "S", false, "send output to the network slowly (10 characters/sec)")
 	flag.StringVar(&srvname, "helo", "", "server name for greeting banners")
 	flag.StringVar(&smtplogfile, "smtplog", "", "log all SMTP conversations to here, '-' for stdout")
@@ -862,9 +854,7 @@ func main() {
 	flag.StringVar(&fromreject, "fromreject", "", "file of address patterns to reject in MAIL FROMs")
 	flag.StringVar(&toaccept, "toaccept", "", "file of address patterns to accept in RCPT TOs")
 	flag.StringVar(&heloreject, "heloreject", "", "file of hostname patterns to reject in EHLOs")
-	flag.StringVar(&corefile, "r", "", "file of core control rules (if set cannot be missing or empty)")
-	flag.StringVar(&suppfile, "s", "", "file of supplementary control rules")
-	flag.BoolVar(&emptyrulesokay, "allow-empty", false, "keep going with an empty or missing -s file")
+	flag.StringVar(&rfiles, "r", "", "comma separated list of files of control rules")
 
 	flag.Usage = Usage
 
@@ -923,6 +913,19 @@ func main() {
 		}
 		fp.Close()
 		os.Remove(tstfile)
+	}
+
+	// Turn the rules file string into filenames and verify that they
+	// are all there and readable.
+	if rfiles != "" {
+		rulefiles = strings.Split(rfiles, ",")
+		for _, rf := range rulefiles {
+			fp, err := os.Open(rf)
+			if err != nil {
+				die("cannot open rules file %s: %s\n", rf, err)
+			}
+			fp.Close()
+		}
 	}
 
 	baserules := buildRules()
