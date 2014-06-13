@@ -177,6 +177,26 @@ func die(format string, elems ...interface{}) {
 	os.Exit(1)
 }
 
+// Suppress duplicate warning messages by running them all through
+// a channel to a master, which can simply keep track of what the
+// last message was.
+var uniquer chan string // must be set up in main()
+
+func warnonce(format string, elems ...interface{}) {
+	s := fmt.Sprintf(format, elems...)
+	uniquer <- s
+}
+func warnbackend() {
+	var lastmsg string
+	for {
+		nmsg := <-uniquer
+		if nmsg != lastmsg {
+			fmt.Fprintf(os.Stderr, "sinksmtp: %s", nmsg)
+			lastmsg = nmsg
+		}
+	}
+}
+
 // ----
 // Read address lists in. This is done here because we call warnf()
 // under some circumstances.
@@ -210,10 +230,10 @@ func loadList(fname string) []string {
 	fp, err := os.Open(fname)
 	if err != nil {
 		// An address list that is missing entirely is not an
-		// error that we bother reporting. We only report IO
-		// errors reading the thing.
-		// TODO: this can be things other than missing files,
-		// eg permissions errors.
+		// error that we bother reporting.
+		if !os.IsNotExist(err) {
+			warnonce("error opening %s: %v\n", fname, err)
+		}
 		return nil
 	}
 	defer fp.Close()
@@ -221,17 +241,10 @@ func loadList(fname string) []string {
 	if err != nil {
 		// We deliberately return a nil addrList on error instead
 		// of a partial one.
-		warnf("Problem loading addr list %s: %v\n", fname, err)
+		warnonce("Problem loading addr list %s: %v\n", fname, err)
 		return nil
 	}
-	// If the list is completely empty after loading, we pretend
-	// that it's nil. This may change someday but it seems safest
-	// for now.
-	if len(alist) == 0 {
-		return nil
-	} else {
-		return alist
-	}
+	return alist
 }
 
 // ----
@@ -262,13 +275,15 @@ func accumRules(baserules []*Rule, fname string) ([]*Rule, error) {
 	return append(baserules, rules...), err
 }
 
-// Take our base rules from command line options and a possible rules
-// file and return the rules to use, possibly with a fatal error string.
-// If there are serious load problems we use the rules system itself to
-// return 'rules' that are a single rule that will defer everything.
-// Normally all errors loading a rules file are bad and result in stalls;
-// emptyrulesokay allows us to continue with the base rules if the file
-// is not there or loads empty. Parse errors are *always* bad.
+// Accumulate the set of rules for this connection from our base rules
+// (already pre-parsed) and rules loaded from our rules files, if any.
+// If there are any errors in loading or parsing the rules files, we
+// use the rules system itself to return a single rule that will defer
+// everything.
+//
+// Our contract is that we return an error string pointer only if
+// the panic stall rules fail to parse for some reason. Thus any
+// error return from setupRules() is a *really* fatal problem.
 func setupRules(baserules []*Rule) ([]*Rule, *string) {
 	var rules []*Rule
 	var rfile string
@@ -281,17 +296,15 @@ func setupRules(baserules []*Rule) ([]*Rule, *string) {
 			break
 		}
 	}
-
 	if err == nil {
 		return rules, nil
 	}
 
 	// Our rule is that if we're going to stall all activity, we're
 	// going to write a warning message about it.
-	// TODO: write it once per problem. This will probably take a
-	// channel.
-	// If the rules fail to load, we panic and stall everything.
-	warnf("problem loading rules %s: %s\n", rfile, err)
+	// If the rules fail to load, we panic and stall everything via
+	// the simple mechanism of generating a 'stall all' set of rules.
+	warnonce("problem loading rules %s: %s\n", rfile, err)
 	return Parse("stall all")
 }
 
@@ -941,6 +954,10 @@ func main() {
 		}
 		go listener(conn, listenc)
 	}
+
+	// start up our 'suppress duplicate warnings' backend goroutine
+	uniquer = make(chan string)
+	go warnbackend()
 
 	// Loop around getting new connections from our listeners and
 	// handing them off to be processed. We insist on sitting in
