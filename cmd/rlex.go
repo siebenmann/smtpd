@@ -331,8 +331,15 @@ func lexWord(l *lexer) stateFn {
 	switch {
 	case keywords[v] != itemError:
 		l.emit(keywords[v])
-	case v[0] == '/' || strings.HasPrefix(v, "./") || strings.HasPrefix(v, "file"):
+	case v[0] == '/' || strings.HasPrefix(v, "./"):
+
 		l.emit(itemFilename)
+	case strings.HasPrefix(v, "file:"):
+		if len(v) <= len("file:") {
+			return l.errorf("'file:' with no filename")
+		} else {
+			l.emit(itemFilename)
+		}
 	default:
 		l.emit(itemValue)
 	}
