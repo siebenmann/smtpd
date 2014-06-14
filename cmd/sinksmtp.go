@@ -18,9 +18,13 @@
 //             first.
 // -S: slow; send all server replies out to the network at a rate of one
 //     character every tenth of a second.
-// -noyakkers: if a client repeatedly connects but doesn't get as far as
-//     successfully EHLO'ing, mark them as a 'yakker'. Yakkers get 4xx
-//     responses to everything and their SMTP commands aren't logged.
+// -dncount NUM: Start stalling a do-nothing client after this many
+//     connections in which it did not even EHLO successfully.
+//     Stalled clients get 4xx responses to everything and their SMTP
+//     sessions aren't logged. Only does something with -smtplog.
+// -dndur DUR: Both how long we stall a do-nothing client for before
+//     giving it a second chance and the time window over which we count
+//     do-nothing sessions.
 //
 // -c FILE, -k FILE: provide TLS certificate and private key to enable TLS.
 //                   Both files must be PEM encoded. Self-signed is fine.
@@ -321,8 +325,10 @@ func setupRules(baserules []*Rule) ([]*Rule, bool) {
 // all' timeout.
 
 const tlsTimeout = time.Hour * 72
-const yakTimeout = time.Hour * 6
-const yakCount = 5
+
+// Theoretically redundant in the face of flag settings.
+var yakTimeout = time.Hour * 8
+var yakCount = 5
 
 type ipEnt struct {
 	when  time.Time
@@ -650,7 +656,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	// This is kind of a hack, but this code is for Chris and this is
 	// what Chris cares about.
 	hit, cnt := yakkers.Lookup(trans.rip, yakTimeout)
-	if hit && cnt > yakCount && smtplog != nil {
+	if yakCount > 0 && hit && cnt >= yakCount && smtplog != nil {
 		// nit: if the rules are bad and we're stalling anyways,
 		// yakkers still have their SMTP transactions not logged.
 		c = newContext(trans, stallall)
@@ -775,13 +781,13 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	// to do anything against them.
 	// And we have to have good rules to start with because duh.
 	switch {
-	case !gotsomewhere && !stall && rulesgood && noyakkers:
+	case !gotsomewhere && !stall && rulesgood && yakCount > 0:
 		yakkers.Add(trans.rip, yakTimeout)
 		// See if this transaction has pushed the client over the
 		// edge to becoming a yakker. If so, report it to the SMTP
 		// log.
 		hit, cnt = yakkers.Lookup(trans.rip, yakTimeout)
-		if hit && cnt > yakCount && smtplog != nil {
+		if hit && cnt >= yakCount && smtplog != nil {
 			s := fmt.Sprintf("! %s added as a yakker at hit %d\n", trans.rip, cnt)
 			logger.Write([]byte(s))
 		}
@@ -816,7 +822,6 @@ var goslow bool
 var srvname string
 var savedir string
 var hashtype string
-var noyakkers bool
 
 func openlogfile(fname string) (outf io.Writer, err error) {
 	if fname == "" {
@@ -922,11 +927,6 @@ the file are rejected.
 Control rule files are reloaded for each new connection. Any errors
 in this process cause the connection to defer all commands with a
 421 response (because sinksmtp can't safely do anything else).
-
-A yakker is a client that connects repeatedly within a certain amount
-of time but never manages a successful EHLO/HELO. Such clients are
-stalled with 4xx responses to everything and their SMTP transactions
-are not logged. -noyakkers is only meaningful if -smtplog is set.
 `
 
 func main() {
@@ -950,7 +950,8 @@ func main() {
 	flag.StringVar(&toaccept, "toaccept", "", "file of address patterns to accept in RCPT TOs")
 	flag.StringVar(&heloreject, "heloreject", "", "file of hostname patterns to reject in EHLOs")
 	flag.StringVar(&rfiles, "r", "", "comma separated list of files of control rules")
-	flag.BoolVar(&noyakkers, "noyakkers", false, "stall clients that repeatedly don't do anything")
+	flag.IntVar(&yakCount, "dncount", 0, "stall & don't log do-nothing clients after this many connections")
+	flag.DurationVar(&yakTimeout, "dndur", time.Hour*8, "default do-nothing client timeout period and time window")
 
 	flag.Usage = Usage
 
@@ -972,6 +973,12 @@ func main() {
 	}
 	if !(hashtype == "msg" || hashtype == "full" || hashtype == "all") {
 		die("bad option for -save-hash: '%s'. Only msg, full, and all are valid.\n", hashtype)
+	}
+	if yakCount > 0 && smtplogfile == "" {
+		die("-dncount requires -smtplog")
+	}
+	if yakCount > 0 && yakTimeout < time.Second {
+		die("-dndur is too small; must be at least one second")
 	}
 
 	switch {
