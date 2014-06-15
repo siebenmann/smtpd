@@ -200,12 +200,13 @@ type stateFn func(*lexer) stateFn
 type lexer struct {
 	input string
 	state stateFn
-	pos   int
-	start int
-	width int
+	pos   int // current position in input
+	start int // start of current token/scan thing in input
+	width int // amount to back up on .backup(); 0 at EOF
 	items chan item
 }
 
+// return next character, consuming it by advancing input position
 func (l *lexer) next() int {
 	if l.pos >= len(l.input) {
 		l.width = 0
@@ -217,35 +218,45 @@ func (l *lexer) next() int {
 	return int(r)
 }
 
+// reverse the effect of .next(). we need l.width so that we don't back
+// up one character when .next() returned EOF.
 func (l *lexer) backup() {
 	l.pos -= l.width
 }
 
+// peek at current character without consuming it
 func (l *lexer) peek() int {
 	r := l.next()
 	l.backup()
 	return r
 }
+
+// swallow the current token
 func (l *lexer) swallow() {
 	l.start = l.pos
 }
 
+// emit the current token to the lexer channel
 func (l *lexer) emit(t itemType) {
 	l.items <- item{t, l.input[l.start:l.pos], l.start}
 	l.start = l.pos
 }
 
+// emit an error to the lexer channel *AND* return nil as the next
+// lexer step. This is a hybrid function
 func (l *lexer) errorf(format string, args ...interface{}) stateFn {
 	l.items <- item{itemError, fmt.Sprintf(format, args...), l.start}
 	return nil
 }
 
+// run the internal lexer to lex input until we're done or things explode
 func (l *lexer) run() {
 	for l.state = lexLineStart; l.state != nil; {
 		l.state = l.state(l)
 	}
 }
 
+// get the next token from the lexer channel
 func (l *lexer) nextItem() item {
 	item := <-l.items
 	return item
@@ -264,6 +275,8 @@ func (l *lexer) lineInfo(pos int) (lnum int, lpos int) {
 	return lnum, 1 + lpos
 }
 
+// Given a string, create and return a lexer for it. Callers then
+// call l.nextItem() until it returns EOF or an error.
 func lex(input string) *lexer {
 	l := &lexer{
 		input: input,
@@ -273,7 +286,11 @@ func lex(input string) *lexer {
 	return l
 }
 
+//
+// Internal lexer state functions
+
 // silently skip over whitespace, if any.
+// this is not a state function but it is called by state functions.
 func skipWhitespace(l *lexer) {
 	for {
 		r := l.next()
@@ -332,7 +349,6 @@ func lexWord(l *lexer) stateFn {
 	case keywords[v] != itemError:
 		l.emit(keywords[v])
 	case v[0] == '/' || strings.HasPrefix(v, "./"):
-
 		l.emit(itemFilename)
 	case strings.HasPrefix(v, "file:"):
 		if len(v) <= len("file:") {
@@ -366,7 +382,7 @@ func lexLineRunning(l *lexer) stateFn {
 	}
 }
 
-// Eat the comment to end of line or EOF.
+// Eat a comment to end of line or EOF.
 func lexComment(l *lexer) stateFn {
 	idx := strings.IndexByte(l.input[l.pos:], '\n')
 	if idx < 0 {

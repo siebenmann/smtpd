@@ -1,8 +1,25 @@
 //
 // Parse rules.
-// This is currently a skeleton that parses but does nothing except choke
-// on errors.
 //
+// our grammar:
+// a file is a sequence of rules; each rule ends at end of line
+//
+// rule  -> [phase] [toall] what andl EOL|EOF
+// phase -> @HELO | @FROM | @TO | @DATA | @MESSAGE
+// what  -> ACCEPT | REJECT | STALL
+// andl  -> orl [andl]
+// orl   -> term [OR orl]
+// term  -> NOT term
+//          ( andl )
+//          ALL
+//          TLS ON|OFF
+//          DNS DNS-OPT[,DNS-OPT]
+//          HELO-HAS HELO-OPT[,HELO-OPT]
+//          FROM-HAS|TO-HAS ADDR-OPT[,ADDR-OPT]
+//          FROM|TO|HELO|HOST arg
+// arg   -> VALUE
+//          FILENAME
+// arg actually is 'anything', keywords become values in it.
 
 package main
 
@@ -11,33 +28,16 @@ import (
 	"fmt"
 )
 
-// grammar:
-// a squence of rules
-//
-// rule  -> [phase] [toall] what orl EOL|EOF
-// phase -> @HELO | @FROM | @TO | @DATA | @MESSAGE
-// what  -> ACCEPT | REJECT | STALL
-// andl  -> orl [andl]
-// orl   -> term [OR orl]
-// term  -> NOT term
-//          ( andl )
-//          TLS ON|OFF
-//          DNS DNS-OPT[,DNS-OPT]
-//          HELO-HAS HELO-OPT[,HELO-OPT]
-//          FROM-HAS|TO-HAS ADDR-OPT[,ADDR-OPT]
-//          FROM|TO|HELO|HOST arg
-//          ALL
-// arg   -> VALUE
-//          FILENAME
-// arg actually is 'anything', keywords become values in it.
-
+// our approach to lookahead is that parsing rules must deliberately
+// consume the current token instead of getting it, looking at it,
+// and then putting it back if they don't want it.
 type Parser struct {
-	l      *lexer
-	curtok item
-
+	l       *lexer
+	curtok  item
 	currule *Rule
 }
 
+// consume the current token and advance to the next one
 func (p *Parser) consume() {
 	// EOF is sticky because we pretend that it is an end of line
 	// marker.
@@ -45,6 +45,8 @@ func (p *Parser) consume() {
 		return
 	}
 	if p.curtok.typ == itemError {
+		// we panic because the rest of the code is supposed to not
+		// do this. doing it anyways is an internal coding error.
 		panic("trying to consume an error")
 	}
 	p.curtok = p.l.nextItem()
@@ -54,6 +56,9 @@ func (p *Parser) isEol() bool {
 	return p.curtok.typ == itemEOL || p.curtok.typ == itemEOF
 }
 
+// generate errors in various forms. the full form is for 'we expected Y
+// but got X'. The other forms are for when the current token is not a
+// useful part of the error.
 func (p *Parser) genError(msg string) error {
 	ln, lp := p.l.lineInfo(p.curtok.pos)
 	var fnd string
@@ -86,6 +91,7 @@ func (p *Parser) posError(msg string) error {
 	return errors.New(s)
 }
 
+// parse: NOT term
 func (p *Parser) pNot() (expr Expr, err error) {
 	p.consume()
 	exr := &NotN{}
@@ -99,6 +105,7 @@ func (p *Parser) pNot() (expr Expr, err error) {
 	return exr, err
 }
 
+// parse: ( andl )
 func (p *Parser) pParen() (expr Expr, err error) {
 	p.consume()
 	er, err := p.pAndl()
@@ -115,6 +122,8 @@ func (p *Parser) pParen() (expr Expr, err error) {
 	return er, err
 }
 
+// parse: arg
+// this rejects special things like EOL.
 func (p *Parser) pArg() (arg string, err error) {
 	if p.curtok.typ < itemHasValue {
 		return "", p.genError("expected argument")
@@ -124,6 +133,7 @@ func (p *Parser) pArg() (arg string, err error) {
 	return
 }
 
+// parse: ON|OFF
 func (p *Parser) pOnOff() (on bool, err error) {
 	switch p.curtok.typ {
 	case itemOn:
@@ -139,6 +149,8 @@ func (p *Parser) pOnOff() (on bool, err error) {
 
 // Minimum phase requirements for various things that cannot be evaluated
 // at any time.
+// This is used to set the overall phase requirement for the rule being
+// generated
 var minReq = map[itemType]Phase{
 	itemFrom: pMfrom, itemHelo: pHelo, itemTo: pRto,
 	itemFromHas: pMfrom, itemToHas: pRto, itemHeloHas: pHelo,
@@ -148,6 +160,8 @@ var minReq = map[itemType]Phase{
 	itemTls: pMfrom,
 }
 
+// Options for HELO-HAS, DNS, FROM-HAS, and TO-HAS. These map from lexer
+// tokens to the option bitmap values that the token means.
 var heloMap = map[itemType]Option{
 	itemHelo: oHelo, itemEhlo: oEhlo, itemNone: oNone, itemNodots: oNodots,
 	itemBareip: oBareip,
@@ -160,12 +174,17 @@ var addrMap = map[itemType]Option{
 	itemUnqualified: oUnqualified, itemRoute: oRoute, itemQuoted: oQuoted,
 	itemNoat: oNoat, itemGarbage: oGarbage, itemBad: oBad,
 }
+
+// map from the starting token to the appropriate option map.
 var mapMap = map[itemType]map[itemType]Option{
 	itemFromHas: addrMap, itemToHas: addrMap,
 	itemHeloHas: heloMap,
 	itemDns:     dnsMap,
 }
 
+// parse: any variant of comma-separated options. We are called with
+// a map that tells us which particular set of options to use and what
+// they map to.
 func (p *Parser) pCommaOpts(m map[itemType]Option) (opt Option, err error) {
 	for {
 		ct := p.curtok.typ
@@ -183,6 +202,8 @@ func (p *Parser) pCommaOpts(m map[itemType]Option) (opt Option, err error) {
 	return opt, nil
 }
 
+// parse: a term. This is the big production at the bottom of the parse
+// stack.
 func (p *Parser) pTerm() (expr Expr, err error) {
 	ct := p.curtok.typ
 	if ct == itemNot {
@@ -198,6 +219,11 @@ func (p *Parser) pTerm() (expr Expr, err error) {
 	}
 
 	// get argument
+	// we split handling terms into separate 'get argument' and
+	// 'generate expression node' operations because everything
+	// that takes an argument has to check if the attempt to get
+	// an argument ran into an error (and a number of things have
+	// common operations but separate expression nodes).
 	var arg string
 	var ison bool
 	var opts Option
@@ -209,12 +235,14 @@ func (p *Parser) pTerm() (expr Expr, err error) {
 		p.consume()
 		ison, err = p.pOnOff()
 	case itemAll:
+		// directly handle 'all' here since it has no argument.
 		p.consume()
 		return &AllN{}, nil
 	case itemFromHas, itemToHas, itemDns, itemHeloHas:
 		p.consume()
 		opts, err = p.pCommaOpts(mapMap[ct])
 	default:
+		// The current token is not actually a valid term.
 		// Since we are bottoming out on the parsing stack,
 		// we need to start shuttling unrecognized things
 		// back up it here.
@@ -224,6 +252,8 @@ func (p *Parser) pTerm() (expr Expr, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// generate the expression node for the term now that we have a
+	// valid argument.
 	switch ct {
 	case itemFrom:
 		return newFromNode(arg), nil
@@ -244,35 +274,13 @@ func (p *Parser) pTerm() (expr Expr, err error) {
 	case itemTls:
 		return &TlsN{on: ison}, nil
 	default:
+		// we should have trapped not-a-term above.
+		// reaching here is a coding error.
 		panic("should be impossible")
 	}
 }
 
-// We cheat by not recursing and simply looping.
-func (p *Parser) pAndl() (expr Expr, err error) {
-	exp := &AndL{}
-	for {
-		er, err := p.pOrl()
-		if err != nil {
-			return nil, err
-		}
-		if er == nil {
-			break
-		}
-		exp.nodes = append(exp.nodes, er)
-	}
-	// we suppress length-1 AndLs in favour of just returning the
-	// underlying expression.
-	switch {
-	case len(exp.nodes) > 1:
-		return exp, nil
-	case len(exp.nodes) == 1:
-		return exp.nodes[0], nil
-	default:
-		return nil, nil
-	}
-}
-
+// parse: orl -> term [OR orl]
 func (p *Parser) pOrl() (expr Expr, err error) {
 	exp := &OrN{}
 	er, err := p.pTerm()
@@ -298,6 +306,38 @@ func (p *Parser) pOrl() (expr Expr, err error) {
 	return exp, err
 }
 
+// parse: andl -> orl [andl]
+// We cheat by not recursing and simply looping.
+func (p *Parser) pAndl() (expr Expr, err error) {
+	exp := &AndL{}
+	for {
+		er, err := p.pOrl()
+		if err != nil {
+			return nil, err
+		}
+		if er == nil {
+			break
+		}
+		exp.nodes = append(exp.nodes, er)
+	}
+	// we suppress length-1 AndLs in favour of just returning the
+	// underlying expression.
+	// among other things, this makes us round-trip rules successfully;
+	// otherwise we would accrete an extra andl node every round trip.
+	switch {
+	case len(exp.nodes) > 1:
+		return exp, nil
+	case len(exp.nodes) == 1:
+		return exp.nodes[0], nil
+	default:
+		// this means we didn't actually parse anything because
+		// the chain orl -> term wound up with term returning
+		// nothing.
+		return nil, nil
+	}
+}
+
+// parse: [phase]
 var phases = map[itemType]Phase{
 	itemAHelo: pHelo, itemAFrom: pMfrom, itemATo: pRto, itemAData: pData,
 	itemAMessage: pMessage,
@@ -311,7 +351,7 @@ func (p *Parser) pPhase() {
 	}
 }
 
-// A rule is [phase] what [orl]
+// Parse a rule. A rule is [phase] what [orl]
 // *rules are the only thing that consume end of line markers*
 // the lexer does not feed us empty lines, so there must be a
 // word start in here. As a result we ignore this possibility.
@@ -343,11 +383,12 @@ func (p *Parser) pRule() (r *Rule, err error) {
 	if p.isEol() {
 		// we check for errors before consuming the EOL so that
 		// the line numbers come out right in error messages.
-		if p.currule.deferto != pAny &&
-			p.currule.deferto < p.currule.requires {
-			return nil, p.lineError("rule specifies a phase lower than its operations require, does not make sense")
+		if p.currule.deferto != pAny && p.currule.deferto < p.currule.requires {
+			return nil, p.lineError("rule specifies a phase lower than its operations require so we cannot satisfy the phase requirement")
 		}
-		// remove trivial root of 'defer to now'.
+		// If this rule wants to be defered to the phase it requires
+		// anyways, we remove the deferto marker. This helps out
+		// rules evaluation.
 		if p.currule.deferto == p.currule.requires {
 			p.currule.deferto = pAny
 		}
@@ -357,7 +398,7 @@ func (p *Parser) pRule() (r *Rule, err error) {
 		// This is technically 'expecting end of line' but that
 		// is not a useful error. What it really means is that
 		// we ran into something that is not an operation down
-		// in the depths of stuff and it bubbled up to here.
+		// in the depths of pTerm and it bubbled up to here.
 		return nil, p.genError("expecting an operation")
 	}
 }
@@ -379,9 +420,13 @@ func (p *Parser) pFile() (rules []*Rule, err error) {
 	return rules, nil
 }
 
+// Parse an input string into a set of rules and a possible error.
+// If there is an error, you must ignore the rules.
 func Parse(input string) (rules []*Rule, err error) {
 	l := lex(input)
 	p := &Parser{l: l}
+	// we must prime the current token with the first token in the
+	// file.
 	p.curtok = l.nextItem()
 	return p.pFile()
 }
