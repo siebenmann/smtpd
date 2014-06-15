@@ -111,7 +111,7 @@ func (c *Context) getMatchList(a string) []string {
 	case strings.HasPrefix(a, "file:"):
 		fname = a[len("file:"):]
 	default:
-		return []string{a}
+		return []string{strings.ToLower(a)}
 	}
 
 	if c.files[fname] != nil {
