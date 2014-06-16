@@ -1,4 +1,6 @@
 //
+package main
+
 // Lexer for processing rules.
 // See rules.go.
 //
@@ -15,7 +17,6 @@
 // whitespace.)
 //
 // A final newline is optional.
-package main
 
 import (
 	"fmt"
@@ -270,7 +271,7 @@ func (l *lexer) nextItem() item {
 func (l *lexer) lineInfo(pos int) (lnum int, lpos int) {
 	lnum = 1 + strings.Count(l.input[:pos], "\n")
 	for i := pos - 1; i >= 0 && l.input[i] != '\n'; i-- {
-		lpos += 1
+		lpos++
 	}
 	return lnum, 1 + lpos
 }
@@ -324,9 +325,8 @@ func lexSpecial(l *lexer) stateFn {
 		if n == ' ' || n == '\t' {
 			l.backup()
 			return l.errorf("comma followed by whitespace")
-		} else {
-			return lexLineRunning
 		}
+		return lexLineRunning
 	default:
 		return lexLineRunning
 	}
@@ -353,9 +353,8 @@ func lexWord(l *lexer) stateFn {
 	case strings.HasPrefix(v, "file:"):
 		if len(v) <= len("file:") {
 			return l.errorf("'file:' with no filename")
-		} else {
-			l.emit(itemFilename)
 		}
+		l.emit(itemFilename)
 	default:
 		l.emit(itemValue)
 	}
@@ -418,9 +417,8 @@ func lexLineStart(l *lexer) stateFn {
 			l.pos += 2
 			l.swallow()
 			return lexLineStart
-		} else {
-			return lexWord
 		}
+		return lexWord
 	case '\n':
 		// We swallow blank lines instead of feeding higher
 		// levels a stream of itemEOLs.

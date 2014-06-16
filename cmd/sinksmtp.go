@@ -158,7 +158,6 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"crypto/tls"
-	"errors"
 	"flag"
 	"fmt"
 	"github.com/siebenmann/smtpd"
@@ -215,9 +214,8 @@ func readList(rdr *bufio.Reader) ([]string, error) {
 		if err != nil {
 			if err == io.EOF {
 				return a, nil
-			} else {
-				return a, err
 			}
+			return a, err
 		}
 		line = strings.TrimSpace(line)
 		if line == "" || line[0] == '#' {
@@ -268,7 +266,7 @@ func loadRules(fname string) ([]*Rule, error) {
 	}
 	rl, err := Parse(string(b))
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("rules parsing error %v", err))
+		return nil, fmt.Errorf("rules parsing error %v", err)
 	}
 	return rl, nil
 }
@@ -358,7 +356,7 @@ func (i *ipMap) Add(ip string, ttl time.Duration) {
 	case time.Now().Sub(t.when) >= ttl:
 		t.count = 0
 	}
-	t.count += 1
+	t.count++
 	t.when = time.Now()
 	i.Unlock()
 }
@@ -377,10 +375,9 @@ func (i *ipMap) Lookup(ip string, ttl time.Duration) (bool, int) {
 	}
 	if time.Now().Sub(t.when) < ttl {
 		return true, t.count
-	} else {
-		i.Del(ip)
-		return false, 0
 	}
+	i.Del(ip)
+	return false, 0
 }
 
 // This is used to log the SMTP commands et al for a given SMTP session.
@@ -422,7 +419,7 @@ func (log *smtpLogger) Write(b []byte) (n int, err error) {
 type smtpTransaction struct {
 	raddr, laddr net.Addr
 	rip          string
-	rdns         *rDnsResults
+	rdns         *rDNSResults
 
 	// these tracking fields are valid only after the relevant
 	// phase/command has been accepted, ie they have the *accepted*
@@ -467,7 +464,7 @@ func getHashes(trans *smtpTransaction) (string, string) {
 	return hash, bodyhash
 }
 
-func writeDnsList(writer io.Writer, pref string, dlist []string) {
+func writeDNSList(writer io.Writer, pref string, dlist []string) {
 	if len(dlist) == 0 {
 		return
 	}
@@ -495,9 +492,9 @@ func msgDetails(prefix string, trans *smtpTransaction) ([]byte, string) {
 	}
 	fmt.Fprintf(writer, "remote %s to %v with helo '%s'\n", rmsg,
 		trans.laddr, trans.heloname)
-	writeDnsList(writer, "remote-dns", trans.rdns.verified)
-	writeDnsList(writer, "remote-dns-nofwd", trans.rdns.nofwd)
-	writeDnsList(writer, "remote-dns-inconsist", trans.rdns.inconsist)
+	writeDNSList(writer, "remote-dns", trans.rdns.verified)
+	writeDNSList(writer, "remote-dns-nofwd", trans.rdns.nofwd)
+	writeDNSList(writer, "remote-dns-inconsist", trans.rdns.inconsist)
 	if trans.tlson {
 		fmt.Fprintf(writer, "tls on cipher 0x%04x", trans.cipher)
 		if cn := cipherNames[trans.cipher]; cn != "" {
@@ -894,15 +891,15 @@ func genStallRules() {
 	}
 }
 
-func Usage() {
+func usage() {
 	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "\t%s [options] [host]:port [[host]:port ...]\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "\nOptions:\n")
 	flag.PrintDefaults()
-	fmt.Fprintf(os.Stderr, usage)
+	fmt.Fprintf(os.Stderr, noteStr)
 }
 
-var usage = `
+var noteStr = `
 See the manual for more comprehensive documentation.
 
 Quick notes:
@@ -953,7 +950,7 @@ func main() {
 	flag.IntVar(&yakCount, "dncount", 0, "stall & don't log do-nothing clients after this many connections")
 	flag.DurationVar(&yakTimeout, "dndur", time.Hour*8, "default do-nothing client timeout period and time window")
 
-	flag.Usage = Usage
+	flag.Usage = usage
 
 	flag.Parse()
 	if flag.NArg() == 0 {
@@ -1056,6 +1053,6 @@ func main() {
 	for {
 		nc := <-listenc
 		go process(cid, nc, certs, logf, slogf, baserules)
-		cid += 1
+		cid++
 	}
 }

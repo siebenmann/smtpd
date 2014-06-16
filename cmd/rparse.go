@@ -1,4 +1,6 @@
 //
+package main
+
 // Parse rules.
 //
 // our grammar:
@@ -21,8 +23,6 @@
 //          FILENAME
 // arg actually is 'anything', keywords become values in it.
 
-package main
-
 import (
 	"errors"
 	"fmt"
@@ -31,14 +31,14 @@ import (
 // our approach to lookahead is that parsing rules must deliberately
 // consume the current token instead of getting it, looking at it,
 // and then putting it back if they don't want it.
-type Parser struct {
+type parser struct {
 	l       *lexer
 	curtok  item
 	currule *Rule
 }
 
 // consume the current token and advance to the next one
-func (p *Parser) consume() {
+func (p *parser) consume() {
 	// EOF is sticky because we pretend that it is an end of line
 	// marker.
 	if p.curtok.typ == itemEOF {
@@ -52,14 +52,14 @@ func (p *Parser) consume() {
 	p.curtok = p.l.nextItem()
 }
 
-func (p *Parser) isEol() bool {
+func (p *parser) isEol() bool {
 	return p.curtok.typ == itemEOL || p.curtok.typ == itemEOF
 }
 
 // generate errors in various forms. the full form is for 'we expected Y
 // but got X'. The other forms are for when the current token is not a
 // useful part of the error.
-func (p *Parser) genError(msg string) error {
+func (p *parser) genError(msg string) error {
 	ln, lp := p.l.lineInfo(p.curtok.pos)
 	var fnd string
 	switch p.curtok.typ {
@@ -80,19 +80,19 @@ func (p *Parser) genError(msg string) error {
 	s := fmt.Sprintf("at line %d char %d: %s, found %s", ln, lp, msg, fnd)
 	return errors.New(s)
 }
-func (p *Parser) lineError(msg string) error {
+func (p *parser) lineError(msg string) error {
 	ln, _ := p.l.lineInfo(p.curtok.pos)
 	s := fmt.Sprintf("at line %d: %s", ln, msg)
 	return errors.New(s)
 }
-func (p *Parser) posError(msg string) error {
+func (p *parser) posError(msg string) error {
 	ln, lp := p.l.lineInfo(p.curtok.pos)
 	s := fmt.Sprintf("at line %d char %d: %s", ln, lp, msg)
 	return errors.New(s)
 }
 
 // parse: NOT term
-func (p *Parser) pNot() (expr Expr, err error) {
+func (p *parser) pNot() (expr Expr, err error) {
 	p.consume()
 	exr := &NotN{}
 	exr.node, err = p.pTerm()
@@ -106,7 +106,7 @@ func (p *Parser) pNot() (expr Expr, err error) {
 }
 
 // parse: ( andl )
-func (p *Parser) pParen() (expr Expr, err error) {
+func (p *parser) pParen() (expr Expr, err error) {
 	p.consume()
 	er, err := p.pAndl()
 	if err != nil {
@@ -124,7 +124,7 @@ func (p *Parser) pParen() (expr Expr, err error) {
 
 // parse: arg
 // this rejects special things like EOL.
-func (p *Parser) pArg() (arg string, err error) {
+func (p *parser) pArg() (arg string, err error) {
 	if p.curtok.typ < itemHasValue {
 		return "", p.genError("expected argument")
 	}
@@ -134,7 +134,7 @@ func (p *Parser) pArg() (arg string, err error) {
 }
 
 // parse: ON|OFF
-func (p *Parser) pOnOff() (on bool, err error) {
+func (p *parser) pOnOff() (on bool, err error) {
 	switch p.curtok.typ {
 	case itemOn:
 		p.consume()
@@ -185,7 +185,7 @@ var mapMap = map[itemType]map[itemType]Option{
 // parse: any variant of comma-separated options. We are called with
 // a map that tells us which particular set of options to use and what
 // they map to.
-func (p *Parser) pCommaOpts(m map[itemType]Option) (opt Option, err error) {
+func (p *parser) pCommaOpts(m map[itemType]Option) (opt Option, err error) {
 	for {
 		ct := p.curtok.typ
 		if m[ct] == oZero {
@@ -204,7 +204,7 @@ func (p *Parser) pCommaOpts(m map[itemType]Option) (opt Option, err error) {
 
 // parse: a term. This is the big production at the bottom of the parse
 // stack.
-func (p *Parser) pTerm() (expr Expr, err error) {
+func (p *parser) pTerm() (expr Expr, err error) {
 	ct := p.curtok.typ
 	if ct == itemNot {
 		return p.pNot()
@@ -281,7 +281,7 @@ func (p *Parser) pTerm() (expr Expr, err error) {
 }
 
 // parse: orl -> term [OR orl]
-func (p *Parser) pOrl() (expr Expr, err error) {
+func (p *parser) pOrl() (expr Expr, err error) {
 	exp := &OrN{}
 	er, err := p.pTerm()
 	if err != nil {
@@ -308,7 +308,7 @@ func (p *Parser) pOrl() (expr Expr, err error) {
 
 // parse: andl -> orl [andl]
 // We cheat by not recursing and simply looping.
-func (p *Parser) pAndl() (expr Expr, err error) {
+func (p *parser) pAndl() (expr Expr, err error) {
 	exp := &AndL{}
 	for {
 		er, err := p.pOrl()
@@ -343,7 +343,7 @@ var phases = map[itemType]Phase{
 	itemAMessage: pMessage,
 }
 
-func (p *Parser) pPhase() {
+func (p *parser) pPhase() {
 	ct := p.curtok.typ
 	if phases[ct] != pAny {
 		p.currule.deferto = phases[ct]
@@ -359,7 +359,7 @@ var actions = map[itemType]Action{
 	itemAccept: aAccept, itemReject: aReject, itemStall: aStall,
 }
 
-func (p *Parser) pRule() (r *Rule, err error) {
+func (p *parser) pRule() (r *Rule, err error) {
 	p.currule = &Rule{}
 	// bail if we are sitting on an EOF.
 	if p.curtok.typ == itemEOF {
@@ -380,31 +380,30 @@ func (p *Parser) pRule() (r *Rule, err error) {
 	if p.currule.expr == nil {
 		return nil, p.lineError("rule needs at least one operation, perhaps 'all'")
 	}
-	if p.isEol() {
-		// we check for errors before consuming the EOL so that
-		// the line numbers come out right in error messages.
-		if p.currule.deferto != pAny && p.currule.deferto < p.currule.requires {
-			return nil, p.lineError("rule specifies a phase lower than its operations require so we cannot satisfy the phase requirement")
-		}
-		// If this rule wants to be defered to the phase it requires
-		// anyways, we remove the deferto marker. This helps out
-		// rules evaluation.
-		if p.currule.deferto == p.currule.requires {
-			p.currule.deferto = pAny
-		}
-		p.consume()
-		return p.currule, err
-	} else {
+	if !p.isEol() {
 		// This is technically 'expecting end of line' but that
 		// is not a useful error. What it really means is that
 		// we ran into something that is not an operation down
 		// in the depths of pTerm and it bubbled up to here.
 		return nil, p.genError("expecting an operation")
 	}
+	// we check for errors before consuming the EOL so that
+	// the line numbers come out right in error messages.
+	if p.currule.deferto != pAny && p.currule.deferto < p.currule.requires {
+		return nil, p.lineError("rule specifies a phase lower than its operations require so we cannot satisfy the phase requirement")
+	}
+	// If this rule wants to be defered to the phase it requires
+	// anyways, we remove the deferto marker. This helps out
+	// rules evaluation.
+	if p.currule.deferto == p.currule.requires {
+		p.currule.deferto = pAny
+	}
+	p.consume()
+	return p.currule, err
 }
 
 // a file is a sequence of rules.
-func (p *Parser) pFile() (rules []*Rule, err error) {
+func (p *parser) pFile() (rules []*Rule, err error) {
 	for {
 		r, e := p.pRule()
 		if e != nil {
@@ -424,7 +423,7 @@ func (p *Parser) pFile() (rules []*Rule, err error) {
 // If there is an error, you must ignore the rules.
 func Parse(input string) (rules []*Rule, err error) {
 	l := lex(input)
-	p := &Parser{l: l}
+	p := &parser{l: l}
 	// we must prime the current token with the first token in the
 	// file.
 	p.curtok = l.nextItem()

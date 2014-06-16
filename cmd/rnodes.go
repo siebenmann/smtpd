@@ -1,6 +1,7 @@
 //
-// Rule nodes and rule evaluation and so on.
 package main
+
+// Rule nodes and rule evaluation and so on.
 
 import (
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"strings"
 )
 
+// Phase is the SMTP conversation phase
 type Phase int
 
 const (
@@ -30,6 +32,8 @@ func (p Phase) String() string {
 	return pMap[p]
 }
 
+// Action is the action to take in response to a successful rule
+// match.
 type Action int
 
 // Actions are in order from weakest (accept) to strongest (reject)
@@ -50,6 +54,8 @@ func (a Action) String() string {
 	return aMap[a]
 }
 
+// Option is bitmaps of all options for from-has/to-has, helo-has, and dns
+// all merged into one type for convenience and my sanity.
 type Option uint64
 
 const (
@@ -78,8 +84,12 @@ const (
 	oBad = oUnqualified | oRoute | oNoat | oGarbage
 )
 
+// Result is the result of evaluating a rule expression. Currently it
+// is either true or false; in the future it may also include 'Defer'.
 type Result bool
 
+// Rule represents a single rule, bundling together various information
+// about what it needs and results in with the expression it evaluates.
 type Rule struct {
 	expr     Expr // expression to evaluate
 	result   Action
@@ -101,7 +111,8 @@ func (r *Rule) String() string {
 	}
 }
 
-// Expr is an expression node, aka an AST node.
+// Expr is an expression node, aka an AST node. Expr nodes may be
+// structural (eg and and or nodes) or terminal nodes (matchers).
 type Expr interface {
 	Eval(c *Context) Result
 	String() string
@@ -109,7 +120,7 @@ type Expr interface {
 
 // Structural nodes
 
-// normal running 'thing1 thing2 ...'
+// AndL is our normal running 'thing1 thing2 ...'
 type AndL struct {
 	nodes []Expr
 }
@@ -131,7 +142,7 @@ func (a *AndL) String() string {
 	return fmt.Sprintf("( %s )", strings.Join(l, " "))
 }
 
-// not <thing>
+// NotN is not <thing>
 type NotN struct {
 	node Expr
 }
@@ -143,7 +154,7 @@ func (n *NotN) String() string {
 	return "not " + n.node.String()
 }
 
-// thing1 or thing2
+// OrN is thing1 or thing2
 type OrN struct {
 	left, right Expr
 }
@@ -164,7 +175,7 @@ func (o *OrN) Eval(c *Context) (r Result) {
 // Terminal nodes that match things.
 //
 
-// All always matches.
+// AllN is all; it always matches
 type AllN struct{}
 
 func (a *AllN) String() string {
@@ -174,7 +185,7 @@ func (a *AllN) Eval(c *Context) (r Result) {
 	return true
 }
 
-// True if TLS is on.
+// TlsN is true if TLS is on. It is 'tls on|off'.
 type TlsN struct {
 	on bool
 }
@@ -190,15 +201,12 @@ func (t *TlsN) Eval(c *Context) (r Result) {
 	return t.on == c.trans.tlson
 }
 
-//
-// from/to/helo/host matchers. All of these have a common pattern:
-// they take an argument that may be a filename and they do either
-// address or host matching. host and to iterate over the valid
-// hostnames and rcptto address respectively, helo/from just look
-// at the EHLO name or the MAIL FROM. We handle all of these with
-// one core object.
-// OUT OF DATE, rcptto matching is singleton now.
-
+// MatchN is a general matcher for from/to/helo/host. All of these have
+// a common pattern: they take an argument that may be a filename or a
+// pattern and they do either address or host matching of some data source
+// against it. Because 'host' matches against all verified host names,
+// they all do list-matching; from/to/helo simply wrap up their single
+// piece of data in a list.
 type MatchN struct {
 	what, arg string
 	// match a literal against a pattern. Either matchHost or matchAddress
@@ -264,7 +272,8 @@ func newToNode(arg string) Expr {
 }
 
 // ------
-//
+
+// OptionN is the general matcher for options.
 // Options have getter functions that interrogate the context to determine
 // what is the case. Those live in rules.go.
 type OptionN struct {

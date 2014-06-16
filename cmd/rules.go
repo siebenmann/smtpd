@@ -1,4 +1,6 @@
 //
+package main
+
 // Core of implementing command processing rules.
 // The documentation below may be out of date. See 'RULES' in this
 // directory for the more canonical documentation.
@@ -44,7 +46,6 @@
 // TODO: write standalone documentation, including on address and
 // hostname patterns.
 //
-package main
 
 import (
 	//"fmt"
@@ -57,7 +58,8 @@ import (
 // http://cuddle.googlecode.com/hg/talk/lex.html
 // http://golang.org/cmd/yacc/
 
-// All rules evaluation happens within a context.
+// Context is the context for all rule evaluation. All expressions take
+// a context structure and operate on the data found in it.
 type Context struct {
 	// all fields in trans are read-only. we access trans.tlson
 	// and trans.rdns

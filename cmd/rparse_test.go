@@ -91,7 +91,7 @@ postmaster@Example.Org
 `
 
 func setupContext(t *testing.T) *Context {
-	rd := &rDnsResults{[]string{"a.b.c", "d.e.f"}, []string{"g"},
+	rd := &rDNSResults{[]string{"a.b.c", "d.e.f"}, []string{"g"},
 		[]string{"h.i"}}
 	st := &smtpTransaction{
 		rdns:  rd,
