@@ -22,6 +22,7 @@ reject helo-has none,nodots,helo from-has bad,quoted dns nodns
 accept dns good
 reject dns noforward,inconsistent
 accept ip 127.0.0.0/24 ip 127.0.0.10
+reject ip 85.90.187.32/27 or host .edmpoint.com or ehlo .edmpoint.com
 
 # test all options for comma-separated things.
 accept dns good or dns noforward,inconsistent,nodns or dns exists

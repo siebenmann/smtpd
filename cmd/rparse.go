@@ -177,7 +177,7 @@ func (p *parser) pOnOff() (on bool, err error) {
 // This is used to set the overall phase requirement for the rule being
 // generated
 var minReq = map[itemType]Phase{
-	itemFrom: pMfrom, itemHelo: pHelo, itemTo: pRto,
+	itemFrom: pMfrom, itemHelo: pHelo, itemEhlo: pHelo, itemTo: pRto,
 	itemFromHas: pMfrom, itemToHas: pRto, itemHeloHas: pHelo,
 	// We can't be sure that TLS is set up until we've seen a
 	// MAIL FROM, because the first HELO/EHLO will be without
@@ -253,7 +253,7 @@ func (p *parser) pTerm() (expr Expr, err error) {
 	var ison bool
 	var opts Option
 	switch ct {
-	case itemFrom, itemTo, itemHelo, itemHost:
+	case itemFrom, itemTo, itemHelo, itemEhlo, itemHost:
 		p.consume()
 		arg, err = p.pArg()
 	case itemIp:
@@ -287,7 +287,7 @@ func (p *parser) pTerm() (expr Expr, err error) {
 		return newFromNode(arg), nil
 	case itemTo:
 		return newToNode(arg), nil
-	case itemHelo:
+	case itemHelo, itemEhlo:
 		return newHeloNode(arg), nil
 	case itemHost:
 		return newHostNode(arg), nil

@@ -89,6 +89,8 @@ THE BIG LIST OF MATCH OPERATORS (AND ARGUMENTS)
  helo HPAT		match the name the client gave in its HELO/EHLO
 			against the hostname pattern HPAT, to be discussed
 			later.
+ ehlo HPAT		this is a synonym for 'helo HPAT'. Chris added
+			it because he kept making this particular mistake.
 
  host HPAT		match the verified hostname of the remote IP
 			(if one exists) against the hostname pattern
