@@ -271,6 +271,14 @@ func newToNode(arg string) Expr {
 	}
 }
 
+func newIPNode(arg string) Expr {
+	return &MatchN{what: "ip", arg: arg, matcher: matchIp,
+		getter: func(c *Context) []string {
+			return []string{c.trans.rip}
+		},
+	}
+}
+
 // ------
 
 // OptionN is the general matcher for options.

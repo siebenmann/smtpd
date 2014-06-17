@@ -21,6 +21,7 @@ reject helo-has none,nodots,helo from-has bad,quoted dns nodns
 @message reject to-has garbage,route
 accept dns good
 reject dns noforward,inconsistent
+accept ip 127.0.0.0/24 ip 127.0.0.10
 
 # test all options for comma-separated things.
 accept dns good or dns noforward,inconsistent,nodns or dns exists
@@ -78,6 +79,9 @@ accept not (from jim@ to @logan)
 accept not dns good
 accept helo .ben
 accept not helo-has bareip
+# IP tests
+accept ip 192.168.10.3 ip 192.168.10.0/24 ip /ips ip 192.168.010.003
+accept not ip 127.0.0.10
 `
 
 var aList = `# This is a comment
@@ -89,13 +93,30 @@ postmaster@Example.Org
 @.barney.net
 # t
 `
+var ipList = `
+127.0.0.0/8
+# this should not generate an error even thought it would in the
+# the actual rules.
+not-valid
+192.168.10.0/24
+`
 
+func setupFile(c *Context, name, conts string) error {
+	reader := bufio.NewReader(strings.NewReader(conts))
+	a, err := readList(reader)
+	if err != nil {
+		return err
+	}
+	c.files[name] = a
+	return nil
+}
 func setupContext(t *testing.T) *Context {
 	rd := &rDNSResults{[]string{"a.b.c", "d.e.f"}, []string{"g"},
 		[]string{"h.i"}}
 	st := &smtpTransaction{
 		rdns:  rd,
 		tlson: true,
+		rip:   "192.168.10.3",
 	}
 	c := &Context{trans: st,
 		helocmd:  smtpd.EHLO,
@@ -105,12 +126,14 @@ func setupContext(t *testing.T) *Context {
 		files:    make(map[string][]string),
 	}
 
-	reader := bufio.NewReader(strings.NewReader(aList))
-	a, err := readList(reader)
+	err := setupFile(c, "/a/file", aList)
 	if err != nil {
 		t.Fatalf("Error during read: %#v", err)
 	}
-	c.files["/a/file"] = a
+	err = setupFile(c, "/ips", ipList)
+	if err != nil {
+		t.Fatalf("Error during iplist read: %#v", err)
+	}
 	return c
 }
 

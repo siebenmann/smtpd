@@ -96,6 +96,7 @@ const (
 	itemTls
 	itemHost
 	itemDns
+	itemIp
 
 	// options that do not duplicate keywords
 	itemEhlo
@@ -147,6 +148,7 @@ var keywords = map[string]itemType{
 	"helo-has": itemHeloHas,
 	"tls":      itemTls,
 	"dns":      itemDns,
+	"ip":       itemIp,
 	// options
 	"ehlo":         itemEhlo,
 	"none":         itemNone,

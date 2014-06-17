@@ -95,6 +95,11 @@ THE BIG LIST OF MATCH OPERATORS (AND ARGUMENTS)
 			HPAT. The hostname is obtained (and verified)
 			through DNS.
 
+ ip IP|CIDR|FILENAME	match the remote IP against the given IP
+			address or CIDR netblock. If given a filename,
+			we read IP addresses and CIDR netblocks from
+			the file ala address and hostname patterns.
+
  tls on|off		match if TLS is on or off respectively on the
 			connection. This doesn't match before MAIL FROM
 			right now, because clients initially connect in

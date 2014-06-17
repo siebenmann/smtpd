@@ -289,6 +289,28 @@ func matchHost(host string, pat string) bool {
 	return false
 }
 
+// match an IP against a CIDR or a plain IP.
+// unfortunately we can't do ParseIP once and pass the result in because
+// of static types.
+func matchIp(rip string, cidr string) bool {
+	// rip comes from the connection so it should always be valid.
+	// We call net.ParseIP() on cidr and then use .Equal() in case
+	// people wrote the rule's IP address in a divergent way, for
+	// example filling in leading zeroes in an IPv4 address's octets
+	// (yes people do this sometimes). ParseIP() has the side effect
+	// of canonicalizing all of that for us.
+	ip := net.ParseIP(rip)
+	ip2 := net.ParseIP(cidr)
+	if ip.Equal(ip2) {
+		return true
+	}
+	_, ipn, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+	return ipn.Contains(ip)
+}
+
 // ----
 
 // Match a rule against every accepted RCPT TO. Returns true if the rule

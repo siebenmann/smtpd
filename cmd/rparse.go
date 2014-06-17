@@ -19,6 +19,7 @@ package main
 //          HELO-HAS HELO-OPT[,HELO-OPT]
 //          FROM-HAS|TO-HAS ADDR-OPT[,ADDR-OPT]
 //          FROM|TO|HELO|HOST arg
+//          IP IPADDR|CIDR|FILENAME
 // arg   -> VALUE
 //          FILENAME
 // arg actually is 'anything', keywords become values in it.
@@ -26,6 +27,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net"
 )
 
 // our approach to lookahead is that parsing rules must deliberately
@@ -133,6 +135,29 @@ func (p *parser) pArg() (arg string, err error) {
 	return
 }
 
+// parse: IP-ADDR|CIDR|FILENAME
+// Unlike pArg, we know that IP addresses or CIDRs can never be
+// tokenized as something other than an itemValue so we can
+// immediately reject anything else.
+func (p *parser) pIPArg() (arg string, err error) {
+	switch p.curtok.typ {
+	case itemFilename:
+		arg = p.curtok.val
+		p.consume()
+		return
+	case itemValue:
+		arg = p.curtok.val
+		if _, _, err := net.ParseCIDR(arg); err != nil && net.ParseIP(arg) == nil {
+			return "", p.genError("argument is not a valid IP address or CIDR")
+		}
+		p.consume()
+		return
+	default:
+		return "", p.genError("expected IP address, CIDR, or filename")
+
+	}
+}
+
 // parse: ON|OFF
 func (p *parser) pOnOff() (on bool, err error) {
 	switch p.curtok.typ {
@@ -231,6 +256,9 @@ func (p *parser) pTerm() (expr Expr, err error) {
 	case itemFrom, itemTo, itemHelo, itemHost:
 		p.consume()
 		arg, err = p.pArg()
+	case itemIp:
+		p.consume()
+		arg, err = p.pIPArg()
 	case itemTls:
 		p.consume()
 		ison, err = p.pOnOff()
@@ -263,6 +291,8 @@ func (p *parser) pTerm() (expr Expr, err error) {
 		return newHeloNode(arg), nil
 	case itemHost:
 		return newHostNode(arg), nil
+	case itemIp:
+		return newIPNode(arg), nil
 	case itemFromHas:
 		return newFromHasOpt(opts), nil
 	case itemToHas:
