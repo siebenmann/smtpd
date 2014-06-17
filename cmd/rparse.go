@@ -414,15 +414,15 @@ func (p *parser) pRule() (r *Rule, err error) {
 	if err != nil {
 		return nil, err
 	}
-	if p.currule.expr == nil {
-		return nil, p.lineError("rule needs at least one operation, perhaps 'all'")
-	}
 	if !p.isEol() {
 		// This is technically 'expecting end of line' but that
 		// is not a useful error. What it really means is that
 		// we ran into something that is not an operation down
 		// in the depths of pTerm and it bubbled up to here.
 		return nil, p.genError("expecting an operation")
+	}
+	if p.currule.expr == nil {
+		return nil, p.lineError("rule needs at least one operation, perhaps 'all'")
 	}
 	// we check for errors before consuming the EOL so that
 	// the line numbers come out right in error messages.
