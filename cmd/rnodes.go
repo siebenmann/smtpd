@@ -67,6 +67,10 @@ const (
 	oNone
 	oNodots
 	oBareip
+	oProperip
+	oMyip
+	oRemip
+	oOtherip
 
 	// DNS options
 	oNodns
@@ -81,7 +85,10 @@ const (
 	oQuoted
 	oNoat
 	oGarbage
+
+	// merged bitmaps
 	oBad = oUnqualified | oRoute | oNoat | oGarbage
+	oIp  = oBareip | oProperip
 )
 
 // Result is the result of evaluating a rule expression. Currently it
@@ -300,6 +307,10 @@ func (t *OptionN) String() string {
 	if (opts & oBad) == oBad {
 		l = append(l, "bad")
 		opts = opts - oBad
+	}
+	if (opts & oIp) == oIp {
+		l = append(l, "ip")
+		opts = opts - oIp
 	}
 	for k, v := range revMap {
 		if (k & opts) == k {

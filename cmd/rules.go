@@ -154,21 +154,40 @@ func dnsGetter(c *Context) (o Option) {
 }
 
 func heloGetter(c *Context) (o Option) {
+	var hip string
 	if c.helocmd == smtpd.HELO {
 		o |= oHelo
 	} else {
 		o |= oEhlo
 	}
-	if c.heloname == "" {
+	hn := c.heloname
+	if hn == "" {
 		return o | oNone | oNodots
 	}
-	idx1 := strings.IndexByte(c.heloname, '.')
-	idx2 := strings.IndexByte(c.heloname, ':')
+	idx1 := strings.IndexByte(hn, '.')
+	idx2 := strings.IndexByte(hn, ':')
 	if idx1 == -1 && idx2 == -1 {
 		o |= oNodots
 	}
-	if i := net.ParseIP(c.heloname); i != nil {
+	if net.ParseIP(hn) != nil {
 		o |= oBareip
+		hip = hn
+	}
+
+	if len(hn) > 2 && hn[0] == '[' && hn[len(hn)-1] == ']' {
+		t := hn[1 : len(hn)-1]
+		if net.ParseIP(t) != nil {
+			hip = t
+			o |= oProperip
+		}
+	}
+	switch {
+	case hip == c.trans.rip:
+		o |= oRemip
+	case hip == c.trans.lip:
+		o |= oMyip
+	case hip != "":
+		o |= oOtherip
 	}
 	return
 }

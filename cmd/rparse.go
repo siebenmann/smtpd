@@ -189,7 +189,8 @@ var minReq = map[itemType]Phase{
 // tokens to the option bitmap values that the token means.
 var heloMap = map[itemType]Option{
 	itemHelo: oHelo, itemEhlo: oEhlo, itemNone: oNone, itemNodots: oNodots,
-	itemBareip: oBareip,
+	itemBareip: oBareip, itemProperip: oProperip, itemMyip: oMyip,
+	itemRemip: oRemip, itemOtherip: oOtherip, itemIp: oIp,
 }
 var dnsMap = map[itemType]Option{
 	itemNodns: oNodns, itemInconsistent: oInconsist, itemNoforward: oNofwd,

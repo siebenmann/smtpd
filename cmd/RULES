@@ -216,6 +216,16 @@ HATTRS is one or more of:
 			'EHLO fred' instead of 'EHLO fred.whatever'.
 	bareip		The HELO name appears to be just a bare IP address,
 			eg 'HELO 127.0.0.1' (instead of 'HELO [127.0.0.1]').
+	properip	The HELO name is a proper IP literal, eg '[127.0.0.1]'
+	ip		This is 'bareip | properip'
+	myip		The HELO name is the local IP address of the server,
+			either bare or in proper form.
+	remoteip	The HELO name is the IP address of client, either bare
+			or in proper form.
+	otherip		The HELO name is in the form of an IP address that is
+			neither the local IP nor the client's IP. As before,
+			the HELO name may be either a bare IP or an IP in
+			proper form.
 
 
 BEHAVIOR ON ERRORS DURING RULE LOADING

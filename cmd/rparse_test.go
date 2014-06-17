@@ -29,7 +29,7 @@ accept dns good or dns noforward,inconsistent,nodns or dns exists
 accept tls on or tls off
 accept from-has unqualified,route,quoted,noat,garbage,bad
 accept to-has unqualified,route,quoted,noat,garbage,bad
-accept helo-has helo,ehlo,none,nodots,bareip
+accept helo-has helo,ehlo,none,nodots,bareip,properip,ip,myip,remip,otherip
 
 `
 
@@ -118,6 +118,7 @@ func setupContext(t *testing.T) *Context {
 		rdns:  rd,
 		tlson: true,
 		rip:   "192.168.10.3",
+		lip:   "127.0.0.1",
 	}
 	c := &Context{trans: st,
 		helocmd:  smtpd.EHLO,
@@ -178,6 +179,38 @@ func TestFileAddrMatching(t *testing.T) {
 		c.from = out
 		if rules[0].expr.Eval(c) {
 			t.Errorf("address list matches %s", out)
+		}
+	}
+}
+
+var heloTests = []struct {
+	helo, match string
+}{
+	{"127.0.0.1", "helo-has bareip helo-has myip"},
+	{"127.0.0.1", "not helo-has properip"},
+	{"[127.0.0.1]", "helo-has properip helo-has myip"},
+	{"[127.0.0.1]", "not helo-has bareip"},
+	{"[192.168.10.3]", "helo-has remip"},
+	{"[192.168.10.3]", "not helo-has myip"},
+	{"[200.200.200.200]", "helo-has otherip"},
+	{"127.10.100.10", "helo-has otherip"},
+	{"[192.168.10.]", "not helo-has ip"},
+	{"[]", "not helo-has ip"},
+	{"192.168.10.", "not helo-has ip"},
+}
+
+func TestHeloHas(t *testing.T) {
+	c := setupContext(t)
+	for _, s := range heloTests {
+		c.heloname = s.helo
+		rules, err := Parse(fmt.Sprintf("accept %s", s.match))
+		if err != nil {
+			t.Errorf("error parsing: %s\n\t%v\n", s.match, err)
+			continue
+		}
+		if !rules[0].expr.Eval(c) {
+			t.Errorf("HELO '%s' does not match: %s\n", s.helo,
+				s.match)
 		}
 	}
 }

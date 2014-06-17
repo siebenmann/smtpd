@@ -419,6 +419,7 @@ func (log *smtpLogger) Write(b []byte) (n int, err error) {
 type smtpTransaction struct {
 	raddr, laddr net.Addr
 	rip          string
+	lip          string
 	rdns         *rDNSResults
 
 	// these tracking fields are valid only after the relevant
@@ -638,7 +639,8 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	trans.raddr = nc.RemoteAddr()
 	trans.laddr = nc.LocalAddr()
 	prefix := fmt.Sprintf("%d/%d", os.Getpid(), cid)
-	trans.rip, _, _ = net.SplitHostPort(nc.RemoteAddr().String())
+	trans.rip, _, _ = net.SplitHostPort(trans.raddr.String())
+	trans.lip, _, _ = net.SplitHostPort(trans.laddr.String())
 
 	var c *Context
 	// nit: in the presence of yakkers, we must know whether or not

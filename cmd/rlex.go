@@ -103,6 +103,10 @@ const (
 	itemNone
 	itemNodots
 	itemBareip
+	itemProperip
+	itemMyip
+	itemRemip
+	itemOtherip
 	itemNodns
 	itemInconsistent
 	itemNoforward
@@ -154,6 +158,10 @@ var keywords = map[string]itemType{
 	"none":         itemNone,
 	"nodots":       itemNodots,
 	"bareip":       itemBareip,
+	"properip":     itemProperip,
+	"myip":         itemMyip,
+	"remip":        itemRemip,
+	"otherip":      itemOtherip,
 	"nodns":        itemNodns,
 	"inconsistent": itemInconsistent,
 	"noforward":    itemNoforward,
