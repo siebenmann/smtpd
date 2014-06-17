@@ -330,7 +330,14 @@ func (p *parser) pOrl() (expr Expr, err error) {
 		return nil, err
 	}
 	if er == nil {
-		return nil, p.posError("empty right side of an OR")
+		// We get here for two reasons: either we ran out of stuff
+		// or we hit something that should have been a term but
+		// isn't. We need to give different errors or I get really
+		// confused.
+		if p.isEol() || p.curtok.typ == itemRparen {
+			return nil, p.posError("empty right side of an OR")
+		}
+		return nil, p.genError("expecting match operation")
 	}
 	exp.right = er
 	return exp, err
