@@ -6,11 +6,12 @@ advertise 8BITMIME.
 
 usage: sinksmtp [options] [host]:port [[host]:port ...]
 
-Options, sensibly organized:
-	-M	Always send a rejection after email messages are received
-		(post-DATA).  This rejection is 'fake' in that message
-		details may be logged and messages may be saved, depending
-		on other settings.
+Note that sinksmtp never exits. You must kill it by hand to shut
+it down.
+
+Main options
+
+This attempts to group options together logically.
 
 	-helo NAME
 		Hostname to advertise in our greeting banner. If not
@@ -22,27 +23,10 @@ Options, sensibly organized:
 	-S	Slow; send all server replies out to the network at a rate
 		of one character every tenth of a second.
 
-	-dncount NUM
-		Start stalling a do-nothing client after this many
-		connections in which it did not even EHLO successfully.
-		Stalled clients get 4xx responses to everything and
-		their SMTP sessions aren't logged. Only does something
-		with -smtplog.
-	-dndur DUR
-		Both how long we stall a do-nothing client for before
-		giving it a second chance and the time window over which
-		we count do-nothing sessions.
-	-minphase PHASE
-		The minimum SMTP phase that a client must succeed at in
-		order to not be considered a do-nothing client. One of
-		helo/ehlo, from, to, data, message, or accepted. 'message'
-		means that the client successfully sent us a message,
-		even if we then reject it; 'accepted' is a sent message
-		is accepted.
-
 	-c FILE, -k FILE
 		Provide TLS certificate and private key to enable TLS.
 		Both files must be PEM encoded. Self-signed is fine.
+		You must give both options together (or neither).
 
 	-l FILE
 		Log one line per fully received message to this file,
@@ -61,24 +45,44 @@ Options, sensibly organized:
 		it (and don't generate any errors). You probably want
 		-l too. The saved data includes message metadata.
 	-save-hash TYPE
-		Base the hash name on one of three things. See HASH
-		NAMING later. Valid types are 'msg', 'full', and 'all'.
+		Base the hash name on one of three things. See 'Save
+		file hash naming' later. Valid types are 'msg', 'full',
+		and 'all'.
 	-force-receive
 		Accept email messages even without a -d (or a -M).
 
+	-M	Always send a 5xx rejection after email messages are
+		received (post-DATA). This rejection is 'fake' in that
+		message details may be logged and messages may be saved
+		if -l and/or -d is set.
+
 	-r FILE[,FILE2,...]
 		Use FILE et al as control rules files. Rules in earlier
-		files take priority over rules in later files.
+		files take priority over rules in later files. A
+		description of what can be in control rules is beyond
+		the scope of this manpage summary; see the RULES file.
+		Explicitly set command line options such as -M or
+		the convenience options below take priority over rules.
 
-A message's hash-based name normally includes everything saved in
-the save file, including message metadata and thus including the
-time the message was received (down to the second) and the message's
-mostly unique log id. This will normally give all messages a different
-hash even if the email is identical.
+	-dncount NUM
+		Start stalling a do-nothing client after this many
+		connections in which it did not even EHLO successfully.
+		Stalled clients get 4xx responses to everything and
+		their SMTP sessions aren't logged. Only does something
+		with -smtplog.
+	-dndur DUR
+		Both how long we stall a do-nothing client for before
+		giving it a second chance and the time window over which
+		we count do-nothing sessions.
+	-minphase PHASE
+		The minimum SMTP phase that a client must succeed at in
+		order to not be considered a do-nothing client. One of
+		helo/ehlo, from, to, data, message, or accepted. 'message'
+		means that the client successfully sent us a message,
+		even if we then reject it; 'accepted' is a sent message
+		that is accepted.
 
-Discussion of control rules are beyond the scope of this
-already-too-long documentation; see the RULES file. Explicitly set
-command line options take priority over rules.
+Convenience options
 
 There are also some convenience options for common rule needs.
 These are:
@@ -109,7 +113,7 @@ to:
 	reject not to file:<whatever>
 	@from reject helo file:<whatever>
 
-LOG ENTRIES AND SAVE FILES:
+Information in log entries and save files
 
 The format of this information is hopefully obvious.
 In save files, everything up to and including the 'body' line is
@@ -132,14 +136,15 @@ DNS results that did not have a successful forward lookup;
 remote IP listed as one of their IPs. Some or all may be missing
 depending on DNS lookup results.
 
-TLS: Go only supports SSLv3+ and we attempt to validate any client
+TLS
+
+Go only supports SSLv3+ and sinksmtp attempts to validate any client
 certificate that clients present to us. Both can cause TLS setup to
 fail (yes, there are apparently some MTAs that only support SSLv2).
-When TLS setup fails we remember the client IP and don't offer TLS
-to it if it reconnects within a certain amount of time (currently
-72 hours).
+When TLS setup fails we remember the client IP and don't offer TLS to
+it if it reconnects within a certain amount of time (currently 72 hours).
 
-HASH NAMING:
+Save file hash naming
 
 With -d DIR set up, sinksmtp saves messages under a hash name computed
 for them. There are three possible hash names and 'all' is the default:
@@ -153,16 +158,13 @@ what appears on the 'id' line). If senders improperly resend messages
 despite a 5xx rejection after the DATA is transmitted, this should
 result in you saving only one copy of each fully unique message.
 
-'all' adds all metadata, including the message ID and timestamp.
-It will almost always be completely unique (well, assuming no hash
-collisions in SHA1 and the sender doesn't send two copies from the
-same source port in the same second).
-
-Note that sinksmtp never exits. You must kill it by hand to shut
-it down.
+'all' adds all metadata, including the log ID and timestamp down to the
+second.  It will basically always be completely unique (well, assuming
+no hash collisions in SHA1 and the sender doesn't send two copies over
+the same connection in the same second; this is impossible if you use
+-S).
 
 */
-
 package main
 
 import (
