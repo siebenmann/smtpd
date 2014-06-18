@@ -239,19 +239,21 @@ described later.
 
  all			always matches
 
- from APAT, to APAT	match MAIL FROM or RCPT TO respectively against
-			address pattern APAT, to be discussed later.
+ from APAT, to APAT	match MAIL FROM or RCPT TO respectively
+			against address pattern APAT, to be
+			discussed later.
 
-			Note that 'to APAT' checks *the current* RCPT
-			TO address, not all of the accumulated RCPT TO
-			addresses so far. A rule that specifies
-			'to a@b to c@d' will never match.
+			Note that 'to APAT' checks *the current*
+			RCPT TO address, not all of the accumulated
+			RCPT TO addresses so far. A rule that
+			specifies 'to a@b to c@d' will never match.
 
- helo HPAT		match the name the client gave in its HELO/EHLO
-			against the hostname pattern HPAT, to be discussed
-			later.
- ehlo HPAT		this is a synonym for 'helo HPAT'. Chris added
-			it because he kept making this particular mistake.
+ helo HPAT		match the name the client gave in its
+			HELO/EHLO against the hostname pattern HPAT,
+			to be discussed later.
+ ehlo HPAT		this is a synonym for 'helo HPAT'. Chris
+			added it because he kept making this
+			particular mistake.
 
  host HPAT		match the verified hostname of the remote IP
 			(if one exists) against the hostname pattern
@@ -262,27 +264,32 @@ described later.
 			if any match.
 
  ip IP|CIDR|FILENAME	match the remote IP against the given IP
-			address or CIDR netblock. If given a filename,
-			we read IP addresses and CIDR netblocks from
-			the file ala address and hostname patterns.
+			address or CIDR netblock. If given a
+			filename, we read IP addresses and CIDR
+			netblocks from the file ala address and
+			hostname patterns.
 
- tls on|off		match if TLS is on or off respectively on the
-			connection. This doesn't match before MAIL FROM
-			right now, because clients initially connect in
-			the clear, EHLO once to find out if they can
-			start TLS, start TLS, and then EHLO again.
-			We don't know for more or less sure if a client
-			is or isn't going to do TLS until MAIL FROM time.
+ tls on|off		match if TLS is on or off respectively on
+			the connection. This doesn't match before
+			MAIL FROM right now, because clients
+			initially connect in the clear, EHLO once to
+			find out if they can start TLS, start TLS,
+			and then EHLO again.  We don't know for
+			more or less sure if a client is or isn't
+			going to do TLS until MAIL FROM time.
 
  from-has AATTRS, to-has AATTRS
-			the MAIL FROM or RCPT TO address has at least
-			one of the address attributes AATTRS. AATTRS is
-			a comma-separated list of specific options.
- helo-has HATTRS	The EHLO/HELO command and its value has at least
-			one of the HELO attributes HATTRS, a comma
-			separated etc etc.
- dns DATTRS		Reverse DNS for the remote IP has at least one
-			of these attributes; a comma separated list.
+			The MAIL FROM or RCPT TO address has
+			at least one of the address attributes
+			AATTRS. AATTRS is a comma-separated list
+			of specific options.
+
+ helo-has HATTRS	The EHLO/HELO command and its value has at
+			least one of the HELO attributes HATTRS, a
+			comma separated etc etc.
+ dns DATTRS		Reverse DNS for the remote IP has at least
+			one of these attributes; a comma separated
+			list.
 
 
 Address and hostname patterns
@@ -404,16 +411,17 @@ HATTRS is one or more of:
 			'EHLO fred' instead of 'EHLO fred.whatever'.
 	bareip		The HELO name appears to be just a bare IP address,
 			eg 'HELO 127.0.0.1' (instead of 'HELO [127.0.0.1]').
-	properip	The HELO name is a proper IP literal, eg '[127.0.0.1]'
+	properip	The HELO name is a proper IP literal, eg
+			'[127.0.0.1]'
 
-	myip		The HELO name is the local IP address of the server,
+	myip		The HELO name is the local IP address of the
+			server, either bare or in proper form.
+	remoteip	The HELO name is the IP address of client,
 			either bare or in proper form.
-	remoteip	The HELO name is the IP address of client, either bare
-			or in proper form.
-	otherip		The HELO name is in the form of an IP address that is
-			neither the local IP nor the client's IP. As before,
-			the HELO name may be either a bare IP or an IP in
-			proper form.
+	otherip		The HELO name is in the form of an IP address
+			that is neither the local IP nor the client's
+			IP. As before, the HELO name may be either
+			a bare IP or an IP in proper form.
 
 	ip		The HELO name is an IP address, either bare or
 			properly quoted. Ie this is 'bareip,properip'.
