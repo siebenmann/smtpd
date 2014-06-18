@@ -25,6 +25,11 @@
 // -dndur DUR: Both how long we stall a do-nothing client for before
 //     giving it a second chance and the time window over which we count
 //     do-nothing sessions.
+// -minphase PHASE: The minimum SMTP phase that a client must succeed at
+//     in order to not be considered a do-nothing client. One of
+//     helo/ehlo, from, to, data, message, or accepted. 'message' means
+//     that the client successfully sent us a message, even if we then
+//     reject it; 'accepted' is a sent message is accepted.
 //
 // -c FILE, -k FILE: provide TLS certificate and private key to enable TLS.
 //                   Both files must be PEM encoded. Self-signed is fine.
@@ -727,9 +732,9 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 				trans.hash = ""
 				trans.bodyhash = ""
 				trans.rcptto = []string{}
-				// this connection succeeded at some
-				// command.
-				gotsomewhere = true
+				if minphase == "helo" {
+					gotsomewhere = true
+				}
 			case smtpd.MAILFROM:
 				if decider(pMfrom, evt, c, convo, "") {
 					continue
@@ -737,15 +742,32 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 				trans.from = evt.Arg
 				trans.data = ""
 				trans.rcptto = []string{}
+				if minphase == "from" {
+					gotsomewhere = true
+				}
 			case smtpd.RCPTTO:
 				if decider(pRto, evt, c, convo, "") {
 					continue
 				}
 				trans.rcptto = append(trans.rcptto, evt.Arg)
+				if minphase == "to" {
+					gotsomewhere = true
+				}
 			case smtpd.DATA:
-				decider(pData, evt, c, convo, "")
+				if decider(pData, evt, c, convo, "") {
+					continue
+				}
+				if minphase == "data" {
+					gotsomewhere = true
+				}
 			}
 		case smtpd.GOTDATA:
+			// -minphase=message means 'message
+			// successfully transmitted to us' as opposed
+			// to 'message accepted'.
+			if minphase == "message" {
+				gotsomewhere = true
+			}
 			// message rejection is deferred until after logging
 			// et al.
 			trans.data = evt.Arg
@@ -760,9 +782,13 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 			switch {
 			case err != nil:
 				convo.Tempfail()
+				gotsomewhere = true
 			case decider(pMessage, evt, c, convo, transid):
 				// do nothing, already handled
 			default:
+				if minphase == "accepted" {
+					gotsomewhere = true
+				}
 				convo.AcceptData(transid)
 			}
 		case smtpd.TLSERROR:
@@ -821,6 +847,7 @@ var goslow bool
 var srvname string
 var savedir string
 var hashtype string
+var minphase string
 
 func openlogfile(fname string) (outf io.Writer, err error) {
 	if fname == "" {
@@ -951,6 +978,7 @@ func main() {
 	flag.StringVar(&rfiles, "r", "", "comma separated list of files of control rules")
 	flag.IntVar(&yakCount, "dncount", 0, "stall & don't log do-nothing clients after this many connections")
 	flag.DurationVar(&yakTimeout, "dndur", time.Hour*8, "default do-nothing client timeout period and time window")
+	flag.StringVar(&minphase, "minphase", "helo", "minimum successful phase to not be a do-nothing client")
 
 	flag.Usage = usage
 
@@ -1026,6 +1054,15 @@ func main() {
 			}
 			fp.Close()
 		}
+	}
+	switch minphase {
+	case "ehlo":
+		// ehlo is a synonym for helo
+		minphase = "helo"
+	case "from", "to", "data", "message", "accepted":
+		// it's okay
+	default:
+		die("invalid -minphase: must be helo/ehlo, from, to, data, message, or accepted")
 	}
 
 	baserules := buildRules()
