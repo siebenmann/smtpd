@@ -1,51 +1,9 @@
 //
-package main
-
 // Core of implementing command processing rules.
-// The documentation below may be out of date. See 'RULES' in this
-// directory for the more canonical documentation.
+// See doc.go in this directory for the documentation on what they are.
 //
-// Processing rules:
-// [phase] accept|reject|stall RULE ....
-//
-// [phase] defers matching the rule until a particular phase is
-// reached, eg '@data reject from @b.com' rejects MAIL FROM @b.com at
-// the DATA phase.
-//
-// RULE is a series of operations. Primitives are:
-//	from ADDRESS. to ADDRESS. helo-as HOST
-//	from-has ADDR-OPTIONS, to-has ADDR-OPTIONS
-//	helo-has helo,ehlo,none,nodots,bareip
-//	tls on|off, host HOST
-//	dns nodns,inconsistent,noforward,good,exists
-//      all
-// ADDR-OPTIONS: unqualified,route,quoted,noat,garbage,bad
-// *-OPTIONS are or'd together. 'bad' is all but 'quoted'.
-// 'host' is a verified DNS name. Maybe IP netblocks in the future?
-// default is to AND all clauses.
-// there is 'or' 'not' and '( ... )'.
-//	reject helo somename from info@fbi.gov not to interesting@addr
-//
-// ADDRESS and HOST can be a filename. Filenames are recognized in
-// three forms: '/a/file' (absolute), './a/rel' (explicitly relative),
-// and 'file:<whatever>' (explicitly marked).
-//
-// rules about RCPT TO addresses match only the *current* RCPT TO
-// address being considered.
-//
-// Rules take effect only at the point in the conversation when all
-// information necessary for them to match is set.
-// First matching rule wins.
-//
-// phases: @helo, @from, @to, @data, @message (DATA received)
-//
-// QUESTION: what does or do? Eg:
-//	reject from info@fbi.gov to fred@barney or to joe@jim
-// ... rejects from: info@fbi.gov, to either fred or joe.
-//
-// TODO: write standalone documentation, including on address and
-// hostname patterns.
-//
+
+package main
 
 import (
 	//"fmt"
