@@ -1,161 +1,168 @@
-// A sinkhole SMTP server.
-// This accepts things and files them away, or perhaps refuses things for
-// you. It can log detailed transactions if desired.
-// Messages are received in all 8 bits, although we don't advertise
-// 8BITMIME.
-//
-// usage: sinksmtp [options] [host]:port [[host]:port ...]
-//
-// Options, sensibly organized:
-// -M: always send a rejection after email messages are received (post-DATA).
-//     This rejection is 'fake' in that message details may be logged and
-//     messages may be saved, depending on other settings.
-//
-// -helo NAME: hostname to advertise in our greeting banner. If not set,
-//             we first try to look up the DNS name of the local IP of
-//             the connection, then just use the local 'IP:port' (which
-//             always exists). If DNS returns multiple names, we use the
-//             first.
-// -S: slow; send all server replies out to the network at a rate of one
-//     character every tenth of a second.
-// -dncount NUM: Start stalling a do-nothing client after this many
-//     connections in which it did not even EHLO successfully.
-//     Stalled clients get 4xx responses to everything and their SMTP
-//     sessions aren't logged. Only does something with -smtplog.
-// -dndur DUR: Both how long we stall a do-nothing client for before
-//     giving it a second chance and the time window over which we count
-//     do-nothing sessions.
-// -minphase PHASE: The minimum SMTP phase that a client must succeed at
-//     in order to not be considered a do-nothing client. One of
-//     helo/ehlo, from, to, data, message, or accepted. 'message' means
-//     that the client successfully sent us a message, even if we then
-//     reject it; 'accepted' is a sent message is accepted.
-//
-// -c FILE, -k FILE: provide TLS certificate and private key to enable TLS.
-//                   Both files must be PEM encoded. Self-signed is fine.
-//
-// -l FILE: log one line per fully received message to this file, may be '-'
-//          for standard output.
-// -smtplog FILE: log SMTP commands received and server output (and some
-//          additional info) to this file. May be '-' for stdout.
-//
-// -d DIR: save received messages to this directory; received files will
-//         be given probably-unique hash-based names. May be combined
-//         with -M, in which case messages will be logged then refused.
-//         If there already is a file with the same hash-based name, we
-//         deliberately don't save over top of it (and don't generate any
-//         errors). You probably want -l too. The saved data includes
-//         message metadata.
-// -save-hash TYPE: Base the hash name on one of three things. See HASH
-//         NAMING later. Valid types are 'msg', 'full', and 'all'.
-// -force-receive: accept email messages even without a -d (or a -M).
-//
-// -r FILE[,FILE2,...]
-//	Use FILE et al as control rules files. Rules in earlier files take
-//	priority over rules in later files.
-//
-// A message's hash-based name normally includes everything saved in
-// the save file, including message metadata and thus including the
-// time the message was received (down to the second) and the message's
-// mostly unique log id. This will normally give all messages a different
-// hash even if the email is identical.
-//
-// Discussion of control rules are beyond the scope of this
-// already-too-long documentation; see the RULES file. Explicitly set
-// command line options take priority over rules.
-//
-// There are also some convenience options for common rule needs.
-// These are:
-// -fromreject FILE: reject any MAIL FROM that matches something
-//         in this address list file.
-// -toaccept FILE: only accept RCPT TO addresses that match something
-//         in this address list file (if it exists and is non-empty).
-// -heloreject FILE: reject any EHLO/HELO name that matches something in
-//         in this host list file.
-//
-// NOTE: the filenames here should not have funny characters in them
-// such as whitespace or commas; otherwise you'll probably get internal
-// errors or at least odd actions.
-//
-// Address lists are reloaded from scratch every time we start a new
-// connection. It is valid for them to not exist; this is the same as
-// not specifying one at all (ie, we accept everything).
-// Address lists are all matched as lower case. There are four sorts
-// of entries: 'a@b' (matches full address), 'a@' (matches a local
-// part at any domain), '@b' (matches any local part at the domain),
-// '@.b' (matches any local part at the domain b or any subdomains of
-// it). Note that our parsing of MAIL FROM/RCPT TO addresses is a bit
-// naive.
-// As a degenerate case, a simple '@' matches everything. Use this with
-// care.
-// Address lists may have comments (start with a '#') and blank lines.
-// An empty address list (no actual entries) is treated as if it didn't
-// exist.
-//
-// Host lists are like address lists except without the '@'. A name
-// with no leading dots matches that name; a name with a starting '.'
-// matches that name or any subdomains of it.
-//
-// Internally these options are compiled into control rules and
-// then checked before any rules in -r files. They are equivalent
-// to:
-//	reject from file:<whatever>
-//	reject not to file:<whatever>
-//	@from reject helo file:<whatever>
-//
-// LOG ENTRIES AND SAVE FILES:
-// The format of this information is hopefully obvious.
-// In save files, everything up to and including the 'body' line is
-// message metadata (ie all '<name> ...' lines, with lower-case
-// <name>s); the actual message starts below 'body'. A 'tls' line
-// will only appear if the message was received over TLS. The cipher
-// numbers are in octal because that is all net/tls gives us and I
-// have not yet built a mapping. 'bodyhash ...' may not actually be
-// a hash for sufficiently mangled messages.
-// The ID that is printed in a number of places is composed of the
-// the daemon's PID plus a sequence number of connections that this
-// daemon has handled; this is to hopefully let you disentangle
-// multiple simultaneous connections in eg SMTP command logs.
-//
-// 'remote-dns' is the fully verified reverse DNS lookup results, ie
-// only reverse DNS names that include the remote IP as one of their
-// IP addresses in a forward lookup. 'remote-dns-nofwd' is reverse
-// DNS results that did not have a successful forward lookup;
-// 'remote-dns-inconsist' is names that looked up but don't have the
-// remote IP listed as one of their IPs. Some or all may be missing
-// depending on DNS lookup results.
-//
-// TLS: Go only supports SSLv3+ and we attempt to validate any client
-// certificate that clients present to us. Both can cause TLS setup to
-// fail (yes, there are apparently some MTAs that only support SSLv2).
-// When TLS setup fails we remember the client IP and don't offer TLS
-// to it if it reconnects within a certain amount of time (currently
-// 72 hours).
-//
-// HASH NAMING:
-//
-// With -d DIR set up, sinksmtp saves messages under a hash name computed
-// for them. There are three possible hash names and 'all' is the default:
-//
-// 'msg' uses only the email contents themselves (the DATA) and doesn't
-// include metadata like MAIL FROM/RCPT TO/etc, which must be recovered
-// from the message log (-l). This requires -l to be set.
-//
-// 'full' adds metadata about the message to the hash (everything except
-// what appears on the 'id' line). If senders improperly resend messages
-// despite a 5xx rejection after the DATA is transmitted, this should
-// result in you saving only one copy of each fully unique message.
-//
-// 'all' adds all metadata, including the message ID and timestamp.
-// It will almost always be completely unique (well, assuming no hash
-// collisions in SHA1 and the sender doesn't send two copies from the
-// same source port in the same second).
-//
-// -----
-//
-// Note that sinksmtp never exits. You must kill it by hand to shut
-// it down.
-//
+/*
+Sinksmtp is a sinkhole SMTP server. It accepts things and files them
+away, or perhaps refuses things for you. It can log detailed transactions
+if desired. Messages are received in all 8 bits, although we don't
+advertise 8BITMIME.
+
+usage: sinksmtp [options] [host]:port [[host]:port ...]
+
+Options, sensibly organized:
+	-M	Always send a rejection after email messages are received
+		(post-DATA).  This rejection is 'fake' in that message
+		details may be logged and messages may be saved, depending
+		on other settings.
+
+	-helo NAME
+		Hostname to advertise in our greeting banner. If not
+		set, we first try to look up the DNS name of the local
+		IP of the connection, then just use the local 'IP:port'
+		(which always exists). If DNS returns multiple names,
+		we use the first.
+
+	-S	Slow; send all server replies out to the network at a rate
+		of one character every tenth of a second.
+
+	-dncount NUM
+		Start stalling a do-nothing client after this many
+		connections in which it did not even EHLO successfully.
+		Stalled clients get 4xx responses to everything and
+		their SMTP sessions aren't logged. Only does something
+		with -smtplog.
+	-dndur DUR
+		Both how long we stall a do-nothing client for before
+		giving it a second chance and the time window over which
+		we count do-nothing sessions.
+	-minphase PHASE
+		The minimum SMTP phase that a client must succeed at in
+		order to not be considered a do-nothing client. One of
+		helo/ehlo, from, to, data, message, or accepted. 'message'
+		means that the client successfully sent us a message,
+		even if we then reject it; 'accepted' is a sent message
+		is accepted.
+
+	-c FILE, -k FILE
+		Provide TLS certificate and private key to enable TLS.
+		Both files must be PEM encoded. Self-signed is fine.
+
+	-l FILE
+		Log one line per fully received message to this file,
+		may be '-' for standard output.
+
+	-smtplog FILE
+		Log SMTP commands received and server output (and some
+		additional info) to this file. May be '-' for stdout.
+
+	-d DIR
+		Save received messages to this directory; received files
+		will be given probably-unique hash-based names. May be
+		combined with -M, in which case messages will be logged
+		then refused.  If there already is a file with the same
+		hash-based name, we deliberately don't save over top of
+		it (and don't generate any errors). You probably want
+		-l too. The saved data includes message metadata.
+	-save-hash TYPE
+		Base the hash name on one of three things. See HASH
+		NAMING later. Valid types are 'msg', 'full', and 'all'.
+	-force-receive
+		Accept email messages even without a -d (or a -M).
+
+	-r FILE[,FILE2,...]
+		Use FILE et al as control rules files. Rules in earlier
+		files take priority over rules in later files.
+
+A message's hash-based name normally includes everything saved in
+the save file, including message metadata and thus including the
+time the message was received (down to the second) and the message's
+mostly unique log id. This will normally give all messages a different
+hash even if the email is identical.
+
+Discussion of control rules are beyond the scope of this
+already-too-long documentation; see the RULES file. Explicitly set
+command line options take priority over rules.
+
+There are also some convenience options for common rule needs.
+These are:
+	-fromreject FILE
+		Reject any MAIL FROM that matches something in this
+		address list file.
+	-toaccept FILE
+		Only accept RCPT TO addresses that match something in
+		this address list file (if it exists and is non-empty).
+	-heloreject FILE
+		Reject any EHLO/HELO name that matches something in in
+		this host list file.
+
+NOTE: the filenames here should not have funny characters in them
+such as whitespace or commas; otherwise you'll probably get internal
+errors or at least odd actions.
+
+Address and hostname lists are reloaded from scratch every time we
+start a new connection. It is valid for them to not exist or to have
+no entries; this is the same as not specifying one at all (ie, we
+accept everything). They are matched as all lower case. See RULES for
+a discussion of what address and hostname patterns are.
+
+Internally these options are compiled into control rules and
+then checked before any rules in -r files. They are equivalent
+to:
+	reject from file:<whatever>
+	reject not to file:<whatever>
+	@from reject helo file:<whatever>
+
+LOG ENTRIES AND SAVE FILES:
+
+The format of this information is hopefully obvious.
+In save files, everything up to and including the 'body' line is
+message metadata (ie all '<name> ...' lines, with lower-case
+<name>s); the actual message starts below 'body'. A 'tls' line
+will only appear if the message was received over TLS. The cipher
+numbers are in octal because that is all net/tls gives us and I
+have not yet built a mapping. 'bodyhash ...' may not actually be
+a hash for sufficiently mangled messages.
+The ID that is printed in a number of places is composed of the
+the daemon's PID plus a sequence number of connections that this
+daemon has handled; this is to hopefully let you disentangle
+multiple simultaneous connections in eg SMTP command logs.
+
+'remote-dns' is the fully verified reverse DNS lookup results, ie
+only reverse DNS names that include the remote IP as one of their
+IP addresses in a forward lookup. 'remote-dns-nofwd' is reverse
+DNS results that did not have a successful forward lookup;
+'remote-dns-inconsist' is names that looked up but don't have the
+remote IP listed as one of their IPs. Some or all may be missing
+depending on DNS lookup results.
+
+TLS: Go only supports SSLv3+ and we attempt to validate any client
+certificate that clients present to us. Both can cause TLS setup to
+fail (yes, there are apparently some MTAs that only support SSLv2).
+When TLS setup fails we remember the client IP and don't offer TLS
+to it if it reconnects within a certain amount of time (currently
+72 hours).
+
+HASH NAMING:
+
+With -d DIR set up, sinksmtp saves messages under a hash name computed
+for them. There are three possible hash names and 'all' is the default:
+
+'msg' uses only the email contents themselves (the DATA) and doesn't
+include metadata like MAIL FROM/RCPT TO/etc, which must be recovered
+from the message log (-l). This requires -l to be set.
+
+'full' adds metadata about the message to the hash (everything except
+what appears on the 'id' line). If senders improperly resend messages
+despite a 5xx rejection after the DATA is transmitted, this should
+result in you saving only one copy of each fully unique message.
+
+'all' adds all metadata, including the message ID and timestamp.
+It will almost always be completely unique (well, assuming no hash
+collisions in SHA1 and the sender doesn't send two copies from the
+same source port in the same second).
+
+Note that sinksmtp never exits. You must kill it by hand to shut
+it down.
+
+*/
+
 package main
 
 import (
