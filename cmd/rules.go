@@ -12,10 +12,6 @@ import (
 	"strings"
 )
 
-// parsing and lexing in go:
-// http://cuddle.googlecode.com/hg/talk/lex.html
-// http://golang.org/cmd/yacc/
-
 // Context is the context for all rule evaluation. All expressions take
 // a context structure and operate on the data found in it.
 type Context struct {

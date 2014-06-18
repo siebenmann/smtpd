@@ -1,7 +1,5 @@
 //
-package main
-
-// Lexer for processing rules.
+// Lexer for control rules.
 // See rules.go.
 //
 // The structure of this lexer is cribbed wholesale from Rob Pike's
@@ -9,14 +7,24 @@ package main
 // deck I read) and then mutilated by my lack of understanding of how
 // to do it nicely. TODO: clean up, make nicer, etc.
 //
+// The basic structure is that the lexer state is not represented
+// explicitly with a state index but is implicit in what function
+// is processing input. We change states by returning different
+// functions to switch to and end processing by returning nil.
+//
 // Note that this does *no* validity checking. We do not have any idea of,
 // say, 'unterminated ('; that's for higher levels to insist on. The only
 // time we might do that is if we had quoted values, but we don't right
 // now.
 // (Okay, we do need to do one check: commas cannot be followed by
-// whitespace.)
+// whitespace. Since we are silent about whitespace, the higher level
+// can't tell whether or not it was present after a comma.)
 //
-// A final newline is optional.
+// A final newline in the input is optional; we take EOF as an implicit
+// EOL. Well, the parser does. I suppose we could create a fake EOL if
+// we wanted to but we don't do that yet.
+
+package main
 
 import (
 	"fmt"
@@ -134,13 +142,16 @@ var keywords = map[string]itemType{
 	"@to":      itemATo,
 	"@data":    itemAData,
 	"@message": itemAMessage,
+
 	// actions
 	"accept": itemAccept,
 	"reject": itemReject,
 	"stall":  itemStall,
+
 	// ops
 	"or":  itemOr,
 	"not": itemNot,
+
 	// rule operations
 	"all":      itemAll,
 	"from":     itemFrom,
@@ -153,6 +164,7 @@ var keywords = map[string]itemType{
 	"tls":      itemTls,
 	"dns":      itemDns,
 	"ip":       itemIp,
+
 	// options
 	"ehlo":         itemEhlo,
 	"none":         itemNone,

@@ -1,9 +1,8 @@
 //
-package main
-
-// Parse rules.
+// Parse control rules using a standard hand written recursive descent
+// parser.
 //
-// our grammar:
+// our grammar (not fully formal):
 // a file is a sequence of rules; each rule ends at end of line
 //
 // rule  -> [phase] [toall] what andl EOL|EOF
@@ -23,6 +22,8 @@ package main
 // arg   -> VALUE
 //          FILENAME
 // arg actually is 'anything', keywords become values in it.
+
+package main
 
 import (
 	"errors"
@@ -54,6 +55,7 @@ func (p *parser) consume() {
 	p.curtok = p.l.nextItem()
 }
 
+// isEol() is true at logical end of line, which includes EOF.
 func (p *parser) isEol() bool {
 	return p.curtok.typ == itemEOL || p.curtok.typ == itemEOF
 }
