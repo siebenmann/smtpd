@@ -29,6 +29,9 @@ var nMatches = []struct {
 	{"anything", "<>"},
 	{"noat", "@"},
 	{"abc@zamdef.ghi", "@.def.ghi"},
+	{"", "@"},
+	{"@route", "@"},
+	{"broken@", "@"},
 }
 
 func TestAddrMatches(t *testing.T) {

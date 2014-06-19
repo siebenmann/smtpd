@@ -14,7 +14,7 @@ var aLex = `
 accept from a@b.com helo .barney
 
 message reject to cks@jon.snow
-helo reject helo /a/file
+helo reject helo /a/file host file:something
 reject helo somename (from info@fbi.gov or fred@barney) not to i@addr
 reject greeted helo,ehlo,none,nodots,bareip tls on tls off
 mailfrom reject dns nodns,inconsistent,noforward address route,quoted,noat
@@ -66,6 +66,11 @@ var lexTests = []lexTest{
 	{"non-keywords", "fred@barney /a/file", []item{
 		item{itemValue, "fred@barney", 0},
 		item{itemFilename, "/a/file", 0}, tEOF}},
+	{"file:something", "file:something", []item{
+		item{itemFilename, "file:something", 0}, tEOF}},
+	{"file: error", "file:", []item{
+		item{itemError, "'file:' with no filename", 0}}},
+	{"random \\", "\\aback", []item{itv("\\aback"), tEOF}},
 	// random string of items.
 	{"tls", "tls on tls off\n", []item{itm("tls"), itm("on"),
 		itm("tls"), itm("off"), tEOL, tEOF}},

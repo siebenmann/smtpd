@@ -76,10 +76,15 @@ accept not helo-has nodots from @.net or dns nodns or to @.com
 accept helo-has nodots or (from @jones.com to @example.com)
 accept from jim@jones.com to info@fbi.gov or to joe@example.com
 accept not (from jim@ to @logan)
+accept all or to jim@example.com
+accept not from-has noat
+accept not to-has quoted
 # dns is not good because there are inconsistent and noforward stuff
 accept not dns good
 accept helo .ben
 accept not helo-has bareip
+accept host .b.c
+accept host .f
 # IP tests
 accept ip 192.168.10.3 ip 192.168.10.0/24 ip /ips ip 192.168.010.003
 accept not ip 127.0.0.10
@@ -136,6 +141,7 @@ func setupContext(t *testing.T) *Context {
 	if err != nil {
 		t.Fatalf("Error during iplist read: %#v", err)
 	}
+	c.files["/empty"] = []string{}
 	return c
 }
 
@@ -146,9 +152,13 @@ func TestSuccess(t *testing.T) {
 		t.Fatalf("error reported %s\n", err)
 	}
 	for i := range rules {
+		c.rulemiss = false
 		res := rules[i].expr.Eval(c)
 		if !res {
 			t.Errorf("rule did not succeed: %v\n", rules[i].expr)
+		}
+		if c.rulemiss {
+			t.Errorf("rule set rulemiss: %v\n", rules[i].expr)
 		}
 	}
 }
@@ -183,6 +193,18 @@ func TestFileAddrMatching(t *testing.T) {
 	}
 }
 
+func TestEmptyFile(t *testing.T) {
+	c := setupContext(t)
+	rules, e := Parse("accept from file:/empty")
+	if e != nil {
+		t.Fatalf("parse error %v", e)
+	}
+	rules[0].expr.Eval(c)
+	if !c.rulemiss {
+		t.Fatalf("rule did not set rulemiss")
+	}
+}
+
 var heloTests = []struct {
 	helo, match string
 }{
@@ -197,6 +219,9 @@ var heloTests = []struct {
 	{"[192.168.10.]", "not helo-has ip"},
 	{"[]", "not helo-has ip"},
 	{"192.168.10.", "not helo-has ip"},
+	{"", "helo-has none"},
+	{"", "helo-has nodots"},
+	{"fred", "helo-has nodots"},
 }
 
 func TestHeloHas(t *testing.T) {
@@ -211,6 +236,37 @@ func TestHeloHas(t *testing.T) {
 		if !rules[0].expr.Eval(c) {
 			t.Errorf("HELO '%s' does not match: %s\n", s.helo,
 				s.match)
+		}
+	}
+}
+
+// none of these lines should parse
+var notParse = `helo
+accept dns fred,barney
+accept dns nodns, good
+accept fred
+accept host jones or
+accept (host jones or)
+accept host jones or barney
+accept
+accept not
+accept not fred
+accept not dns fred
+accept host
+accept ( host james
+accept ( )
+accept ip abcdef
+accept ip ip
+accept tls fred
+accept or host fred
+accept host fred or dns fred
+@from accept to @fbi.gov`
+
+func TestNotParse(t *testing.T) {
+	for _, ln := range strings.Split(notParse, "\n") {
+		rules, err := Parse(ln)
+		if err == nil {
+			t.Errorf("rule did not error out: '%s'\n\t%+v\n", ln, rules)
 		}
 	}
 }
