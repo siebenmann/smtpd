@@ -217,7 +217,7 @@ func matchAddress(addr string, pat string) bool {
 		return true
 	}
 	idx := strings.IndexByte(addr, '@')
-	if addr == "" || idx == 0 || idx == len(addr) {
+	if addr == "" || idx == 0 || idx == len(addr)-1 {
 		return false
 	}
 	// local name only technically matches 'local@' patterns.
