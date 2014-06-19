@@ -905,10 +905,10 @@ func main() {
 	case "ehlo":
 		// ehlo is a synonym for helo
 		minphase = "helo"
-	case "from", "to", "data", "message", "accepted":
+	case "from", "to", "data", "message", "accepted", "helo":
 		// it's okay
 	default:
-		die("invalid -minphase: must be helo/ehlo, from, to, data, message, or accepted")
+		die("invalid -minphase '%s': must be helo/ehlo, from, to, data, message, or accepted\n", minphase)
 	}
 
 	baserules := buildRules()
