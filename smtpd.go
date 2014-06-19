@@ -413,6 +413,21 @@ func (c *Conn) reply(format string, elems ...interface{}) {
 	}
 }
 
+func (c *Conn) replyMulti(code int, format string, elems ...interface{}) {
+	rs := strings.Trim(fmt.Sprintf(format, elems...), " \t\n")
+	sl := strings.Split(rs, "\n")
+	cont := '-'
+	for i := range sl {
+		if i == len(sl)-1 {
+			cont = ' '
+		}
+		c.reply("%3d%c%s", code, cont, sl[i])
+		if c.state == sAbort {
+			break
+		}
+	}
+}
+
 func fmtBytesLeft(max, cur int64) string {
 	if cur == 0 {
 		return "0 bytes left"
@@ -554,6 +569,33 @@ func (c *Conn) Reject() {
 		c.reply("550 Bad address")
 	case DATA:
 		c.reply("554 Not accepted")
+	}
+	c.replied = true
+}
+
+// RejectMsg rejects the current SMTP command with the fmt.Printf
+// style message that you supply. The generated message may include
+// embedded newlines for a mutli-line reply.
+func (c *Conn) RejectMsg(format string, elems ...interface{}) {
+	switch c.curcmd {
+	case HELO, EHLO, MAILFROM, RCPTTO:
+		c.replyMulti(550, format, elems...)
+	case DATA:
+		c.replyMulti(554, format, elems...)
+	}
+	c.replied = true
+}
+
+// TempfailMsg temporarily rejects the current SMTP command with
+// a 4xx code and the fmt.Printf style message that you supply.
+// The generated message may include embedded newlines for a
+// multi-line reply.
+func (c *Conn) TempfailMsg(format string, elems ...interface{}) {
+	switch c.curcmd {
+	case HELO, EHLO:
+		c.replyMulti(421, format, elems...)
+	case MAILFROM, RCPTTO, DATA:
+		c.replyMulti(450, format, elems...)
 	}
 	c.replied = true
 }
