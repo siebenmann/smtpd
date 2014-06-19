@@ -448,6 +448,14 @@ func handleMessage(prefix string, trans *smtpTransaction, logf io.Writer) (strin
 	return hash, err
 }
 
+// trivial but I care about these messages, neurotic though it may be.
+func pluralRecips(c *Context) string {
+	if len(c.trans.rcptto) > 1 {
+		return "those addresses"
+	}
+	return "that address"
+}
+
 // Decide what to do and then do it if it is a rejection or a tempfail.
 // If given an id (and it is in the message handling phase) we call
 // RejectData(). This is our convenience driver for the rules engine,
@@ -462,9 +470,14 @@ func decider(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id st
 	}
 	switch res {
 	case aReject:
-		if id != "" && ph == pMessage {
-			convo.RejectData(id)
-		} else {
+		switch {
+		case id != "" && ph == pMessage:
+			convo.RejectMsg("We do not consent to you emailing %s\nRejected with ID %s", pluralRecips(c), id)
+		case ph == pMessage || ph == pData:
+			convo.RejectMsg("We do not consent to you emailing %s", pluralRecips(c))
+		case ph == pRto:
+			convo.RejectMsg("We do not consent to you emailing that address")
+		default:
 			convo.Reject()
 		}
 	case aStall:
