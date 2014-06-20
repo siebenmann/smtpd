@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/mail"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -288,6 +289,10 @@ type smtpTransaction struct {
 	// tlson true over time. cipher is valid only if tlson is true.
 	tlson  bool
 	cipher uint16
+
+	// Make our logger accessible in decider() as a hack.
+	log     *smtpLogger
+	lastmsg string
 }
 
 // returns overall hash and body-of-message hash. The latter may not
@@ -448,6 +453,57 @@ func handleMessage(prefix string, trans *smtpTransaction, logf io.Writer) (strin
 	return hash, err
 }
 
+// Given a SBL hit on a remote IP, try to give us what SBL records were hit.
+func getSBLHits(t *smtpTransaction) []string {
+	var sbls []string
+	// since we know this hit, we can omit a lot of checks.
+	s := strings.Split(t.rip, ".")
+	ln := fmt.Sprintf("%s.%s.%s.%s.sbl.spamhaus.org.", s[3], s[2], s[1], s[0])
+	txts, err := net.LookupTXT(ln)
+	if err != nil {
+		return sbls
+	}
+	for _, txt := range txts {
+		idx := strings.LastIndex(txt, "/")
+		if idx == -1 || idx == len(txt)-1 {
+			continue
+		}
+		sbls = append(sbls, txt[idx+1:])
+	}
+	sort.Strings(sbls)
+	return sbls
+}
+
+// As a hack, log DNSBL hits if any. These hits may not have
+// determined the results but there you go.
+// This is a hack but I want to capture this information somehow.
+func logDnsbls(c *Context) {
+	if len(c.dnsblhit) == 0 || c.trans.log == nil {
+		return
+	}
+
+	sort.Strings(c.dnsblhit)
+	lmsg := fmt.Sprintf("! dnsbl hit: %s\n",
+		strings.Join(c.dnsblhit, " "))
+	if lmsg == c.trans.lastmsg {
+		return
+	}
+	c.trans.log.Write([]byte(lmsg))
+	c.trans.lastmsg = lmsg
+
+	// Special bonus feature: log actual SBL entries.
+	for i := range c.dnsblhit {
+		if c.dnsblhit[i] == "sbl.spamhaus.org." {
+			sbls := getSBLHits(c.trans)
+			if len(sbls) > 0 {
+				lmsg = fmt.Sprintf("! SBL records: %s\n",
+					strings.Join(sbls, " "))
+				c.trans.log.Write([]byte(lmsg))
+			}
+		}
+	}
+}
+
 // trivial but I care about these messages, neurotic though it may be.
 func pluralRecips(c *Context) string {
 	if len(c.trans.rcptto) > 1 {
@@ -465,6 +521,8 @@ func pluralRecips(c *Context) string {
 // a rejection or tempfail.
 func decider(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id string) bool {
 	res := Decide(ph, evt, c)
+
+	logDnsbls(c)
 	if res == aNoresult || res == aAccept {
 		return false
 	}
@@ -532,6 +590,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 		logger = &smtpLogger{}
 		logger.prefix = []byte(prefix)
 		logger.writer = bufio.NewWriterSize(smtplog, 8*1024)
+		trans.log = logger
 		l2 = logger
 	}
 

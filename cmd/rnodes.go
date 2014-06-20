@@ -208,6 +208,33 @@ func (t *TlsN) Eval(c *Context) (r Result) {
 	return t.on == c.trans.tlson
 }
 
+// DNSblN is the matcher for DNS blocklist nodes.
+type DNSblN struct {
+	domain string
+}
+
+func (d *DNSblN) String() string {
+	return "dnsbl " + d.domain
+}
+
+func (d *DNSblN) Eval(c *Context) (r Result) {
+	if c.trans.rip == "" {
+		return false
+	}
+	s := strings.Split(c.trans.rip, ".")
+	// We currently only work on IPv4 addresses.
+	if len(s) != 4 {
+		return false
+	}
+	ln := fmt.Sprintf("%s.%s.%s.%s.%s", s[3], s[2], s[1], s[0], d.domain)
+
+	res := c.getDnsblRes(ln)
+	if res {
+		c.addDnsblHit(d.domain)
+	}
+	return res
+}
+
 // MatchN is a general matcher for from/to/helo/host. All of these have
 // a common pattern: they take an argument that may be a filename or a
 // pattern and they do either address or host matching of some data source

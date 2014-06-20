@@ -23,6 +23,7 @@ accept dns good
 reject dns noforward,inconsistent
 accept ip 127.0.0.0/24 ip 127.0.0.10
 reject ip 85.90.187.32/27 or host .edmpoint.com or ehlo .edmpoint.com
+reject dnsbl sbl.spamhaus.org
 
 # test all options for comma-separated things.
 accept dns good or dns noforward,inconsistent,nodns or dns exists
@@ -131,7 +132,13 @@ func setupContext(t *testing.T) *Context {
 		from:     "jim@jones.com",
 		rcptto:   "joe@example.com",
 		files:    make(map[string][]string),
+		dnsbl:    make(map[string]*Result),
 	}
+
+	var rt, rf Result
+	rt = true
+	c.dnsbl["3.10.168.192.nosuch.domain."] = &rt
+	c.dnsbl["3.10.168.192.notthere.domi."] = &rf
 
 	err := setupFile(c, "/a/file", aList)
 	if err != nil {
@@ -260,6 +267,9 @@ accept ip ip
 accept tls fred
 accept or host fred
 accept host fred or dns fred
+accept dnsbl file:/a/somewhere
+accept dnsbl host
+accept dnsbl has-no-dots
 @from accept to @fbi.gov`
 
 func TestNotParse(t *testing.T) {
@@ -268,5 +278,24 @@ func TestNotParse(t *testing.T) {
 		if err == nil {
 			t.Errorf("rule did not error out: '%s'\n\t%+v\n", ln, rules)
 		}
+	}
+}
+
+func TestDnsblHit(t *testing.T) {
+	c := setupContext(t)
+	rules, _ := Parse("accept dnsbl nosuch.domain")
+	if !rules[0].expr.Eval(c) {
+		t.Fatalf("did not hit in nosuch.domain")
+	}
+	if len(c.dnsblhit) != 1 && c.dnsblhit[0] != "nosuch.domain" {
+		t.Fatalf("did not list nosuch.domain in c.dnsblhit:\n\t%#v\n", c.dnsblhit)
+	}
+	c.dnsblhit = []string{}
+	rules, _ = Parse("accept dnsbl notthere.domi")
+	if rules[0].expr.Eval(c) {
+		t.Fatalf("did hit for notthere.domi")
+	}
+	if len(c.dnsblhit) != 0 {
+		t.Fatalf("c.dnsblhit is not empty after notthere.domi test:\n\t%#v\n", c.dnsblhit)
 	}
 }

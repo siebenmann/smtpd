@@ -269,6 +269,9 @@ described later.
 			netblocks from the file ala address and
 			hostname patterns.
 
+ dnsbl DOMAIN		true if the remote IP is in the given DNS
+			blocklist (with any IP address).
+
  tls on|off		match if TLS is on or off respectively on
 			the connection. This doesn't match before
 			MAIL FROM right now, because clients

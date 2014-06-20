@@ -39,6 +39,16 @@ type Context struct {
 	// multiple rules and for multiple checks for eg RCPT TO.
 	files map[string][]string
 
+	// DNS blocklist lookup cache
+	dnsbl map[string]*Result
+	// what DNS blocklists have hit during the call to Decide()
+	// (*not* just the current rule!).
+	// this is a hack to communicate extra information back to
+	// the caller of Decide() through an out of band mechanism
+	// from deep in the depths of rules evaluation, much like
+	// rulemiss.
+	dnsblhit []string
+
 	// we should tempfail for internal reasons, eg tempfail on file
 	// read
 	tempfail bool
@@ -52,9 +62,39 @@ type Context struct {
 	rulemiss bool
 }
 
+// Look up something in a DNS blocklist and get the result. We cache
+// lookups.
+func (c *Context) getDnsblRes(hn string) Result {
+	var res Result
+	if c.dnsbl[hn] != nil {
+		return *c.dnsbl[hn]
+	}
+	ips, err := net.LookupIP(hn)
+	if err != nil {
+		// TODO: it's possible that we should set rulemiss here.
+		// Probably not, though.
+		return false
+	}
+	res = len(ips) > 0
+	c.dnsbl[hn] = &res
+	return res
+}
+
+// add a DNS blocklist hit to our list of them. We do this only if the
+// DNSBL isn't already listed.
+func (c *Context) addDnsblHit(domain string) {
+	for i := range c.dnsblhit {
+		if c.dnsblhit[i] == domain {
+			return
+		}
+	}
+	c.dnsblhit = append(c.dnsblhit, domain)
+}
+
 func newContext(trans *smtpTransaction, rules []*Rule) *Context {
 	c := &Context{trans: trans, ruleset: rules}
 	c.files = make(map[string][]string)
+	c.dnsbl = make(map[string]*Result)
 	return c
 }
 
@@ -333,6 +373,7 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 
 	var ret Action
 	ret = aNoresult
+	c.dnsblhit = []string{}
 	//fmt.Printf("running in %s (old %s)\n", ph, c.last)
 
 	for _, r := range c.ruleset {

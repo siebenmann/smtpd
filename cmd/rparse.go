@@ -19,6 +19,7 @@
 //          FROM-HAS|TO-HAS ADDR-OPT[,ADDR-OPT]
 //          FROM|TO|HELO|HOST arg
 //          IP IPADDR|CIDR|FILENAME
+//          DNSBL DOMAIN
 // arg   -> VALUE
 //          FILENAME
 // arg actually is 'anything', keywords become values in it.
@@ -29,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 )
 
 // our approach to lookahead is that parsing rules must deliberately
@@ -133,6 +135,25 @@ func (p *parser) pArg() (arg string, err error) {
 		return "", p.genError("expected argument")
 	}
 	arg = p.curtok.val
+	p.consume()
+	return
+}
+
+// parse: domain
+// a dnsbl domain necessarily contains dots, which means that it
+// can only be an itemValue.
+func (p *parser) pDomain() (arg string, err error) {
+	if p.curtok.typ != itemValue {
+		return "", p.genError("expected dnsbl domain")
+	}
+	arg = p.curtok.val
+	if strings.IndexByte(arg, '.') == -1 {
+		return "", p.posError("theoretical dnsbl domain contains no '.'")
+	}
+	// dot-terminate the domain for DNS lookups if it isn't already.
+	if arg[len(arg)-1] != '.' {
+		arg = arg + "."
+	}
 	p.consume()
 	return
 }
@@ -262,6 +283,9 @@ func (p *parser) pTerm() (expr Expr, err error) {
 	case itemIp:
 		p.consume()
 		arg, err = p.pIPArg()
+	case itemDnsbl:
+		p.consume()
+		arg, err = p.pDomain()
 	case itemTls:
 		p.consume()
 		ison, err = p.pOnOff()
@@ -296,6 +320,8 @@ func (p *parser) pTerm() (expr Expr, err error) {
 		return newHostNode(arg), nil
 	case itemIp:
 		return newIPNode(arg), nil
+	case itemDnsbl:
+		return &DNSblN{domain: arg}, nil
 	case itemFromHas:
 		return newFromHasOpt(opts), nil
 	case itemToHas:
