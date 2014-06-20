@@ -328,9 +328,8 @@ func (t *OptionN) Eval(c *Context) (r Result) {
 	opt := t.getter(c)
 	return t.opts&opt > 0
 }
-func (t *OptionN) String() string {
+func (opts Option) String() string {
 	var l []string
-	opts := t.opts
 	if (opts & oBad) == oBad {
 		l = append(l, "bad")
 		opts = opts - oBad
@@ -348,7 +347,11 @@ func (t *OptionN) String() string {
 	// we have to make it predictable to have something we can round
 	// trip.
 	sort.Strings(l)
-	return fmt.Sprintf("%s %s", t.what, strings.Join(l, ","))
+	return strings.Join(l, ",")
+}
+
+func (t *OptionN) String() string {
+	return fmt.Sprintf("%s %v", t.what, t.opts)
 }
 
 // GORY HACK. Construct inverse opts mapping through magic knowledge

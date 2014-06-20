@@ -75,3 +75,33 @@ func TestHostMatches(t *testing.T) {
 		}
 	}
 }
+
+var aOpts = []struct {
+	addr string
+	opt  Option
+}{
+	{"", oZero},
+	{"noat", oNoat},
+	{"\"fred\"@jones", oQuoted | oUnqualified},
+	{"jim@jones", oUnqualified},
+	{"@jones:user@jim.bob", oRoute},
+	{"@j:user@jim", oRoute | oUnqualified},
+	{"@garbage", oGarbage | oUnqualified},
+	{"garbage@", oGarbage | oUnqualified},
+	{"<job@jim.bob", oGarbage},
+	{"joe..@jim.bob", oGarbage},
+	{"joe@@jim.bob", oGarbage},
+	{"joe@jim.bob\"", oGarbage},
+	{"joe@jim.bob>", oGarbage},
+	// Ideally this wouldn't happen, but oh well
+	{"\"joe..bob\"@jim.bob", oQuoted | oGarbage},
+}
+
+func TestAddrOpts(t *testing.T) {
+	for _, opt := range aOpts {
+		o := getAddrOpts(opt.addr)
+		if o != opt.opt {
+			t.Errorf("address '%s' evaluated to: %v instead of %v\n", opt.addr, o, opt.opt)
+		}
+	}
+}
