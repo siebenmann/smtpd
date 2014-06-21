@@ -552,7 +552,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	var convo *smtpd.Conn
 	var logger *smtpLogger
 	var l2 io.Writer
-	var gotsomewhere, stall bool
+	var gotsomewhere, stall, sesscounts bool
 
 	defer nc.Close()
 
@@ -575,12 +575,18 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	// SMTP commands; if we're not logging, we don't care.
 	// This is kind of a hack, but this code is for Chris and this is
 	// what Chris cares about.
+	// sesscounts is true if this session should count for being a
+	// 'bad' session if we don't get far enough. Sessions with TLS
+	// errors don't count, as do sessions with bad rules or sessions
+	// where yakCount == 0.
+	sesscounts = rulesgood && yakCount > 0
 	hit, cnt := yakkers.Lookup(trans.rip, yakTimeout)
 	if yakCount > 0 && hit && cnt >= yakCount && smtplog != nil {
 		// nit: if the rules are bad and we're stalling anyways,
 		// yakkers still have their SMTP transactions not logged.
 		c = newContext(trans, stallall)
 		stall = true
+		sesscounts = false
 	} else {
 		c = newContext(trans, rules)
 	}
@@ -712,6 +718,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 			// any TLS error means we'll avoid offering TLS
 			// to this source IP for a while.
 			notls.Add(trans.rip, tlsTimeout)
+			sesscounts = false
 		}
 		if evt.What == smtpd.DONE || evt.What == smtpd.ABORT {
 			break
@@ -723,7 +730,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	// to do anything against them.
 	// And we have to have good rules to start with because duh.
 	switch {
-	case !gotsomewhere && !stall && rulesgood && yakCount > 0:
+	case !gotsomewhere && sesscounts:
 		yakkers.Add(trans.rip, yakTimeout)
 		// See if this transaction has pushed the client over the
 		// edge to becoming a yakker. If so, report it to the SMTP
@@ -733,7 +740,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 			s := fmt.Sprintf("! %s added as a yakker at hit %d\n", trans.rip, cnt)
 			logger.Write([]byte(s))
 		}
-	case gotsomewhere:
+	case yakCount > 0 && gotsomewhere:
 		yakkers.Del(trans.rip)
 	}
 }
