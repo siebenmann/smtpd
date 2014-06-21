@@ -458,12 +458,6 @@ func (p *parser) pRule() (r *Rule, err error) {
 	if p.currule.deferto != pAny && p.currule.deferto < p.currule.requires {
 		return nil, p.lineError("rule specifies a phase lower than its operations require so we cannot satisfy the phase requirement")
 	}
-	// If this rule wants to be defered to the phase it requires
-	// anyways, we remove the deferto marker. This helps out
-	// rules evaluation.
-	if p.currule.deferto == p.currule.requires {
-		p.currule.deferto = pAny
-	}
 	p.consume()
 	return p.currule, err
 }

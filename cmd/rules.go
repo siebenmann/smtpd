@@ -379,7 +379,7 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 	for _, r := range c.ruleset {
 		// Try to determine if we can run this rule.
 		rp := r.requires
-		rr := r.result
+		// We can and must skip a rule in three cases:
 		switch {
 		case rp > ph:
 			// the rule's basic requirements mean we can't
@@ -388,25 +388,26 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 
 		case r.deferto > ph:
 			// This is a simple deferred rule that is not ready
-			// yet. We can run it when its time comes up.
+			// yet. We'll run it when its time comes up.
 			continue
 
-			// Things we still have to process now:
-		case rr <= aAccept || r.deferto == ph:
-			// Accept rules must always be checked because
-			// they don't block us from continuing.
-			// (so we do 'pass' here)
-			// If we've hit the phase for a deferto rule,
-			// it obviously has to run.
-
-			// Final skip case:
-		case (rp == pAny && ph > pHelo) || (rp != pAny && rp < ph):
-			// We can skip aReject and aStall rules if they
-			// require a phase before this one, because if
-			// they matched they would have blocked us from
-			// reaching here.
+		case r.deferto != pAny && r.deferto < ph:
+			// A deferred rule does not run after the
+			// phase it's been deferred to. Note that it
+			// explicitly may be deferred to the phase
+			// that it normally runs in; this will allow
+			// an accept rule to fire only once.
+			// (In corner cases the same is true of stall
+			// and reject rules.)
 			continue
 		}
+		// NOTE that we cannot cleverly skip checking stall or
+		// reject rules without a deferto on the grounds that
+		// we know they can't fire because if they could they
+		// would have blocked us getting to a later phase,
+		// because they could have been 'masked' by a deferto
+		// accept rule that we are now skipping. See doc.go
+		// for an example.
 
 		//fmt.Printf("evaling: %v", r)
 		var res Result

@@ -189,16 +189,6 @@ and is one of:
 been authorized to send the message; @message is after the message has
 been received.
 
-Rules are normally checked at any time where they're applicable and
-where all of the information they need is available. A rule that does
-things with MAIL FROM addresses will not match before @from; a rule that
-does things with RCPT TO addresses will not match before @to (and thus
-can't be used to, say, reject a MAIL FROM). It is an error to specify
-an explicit phase that is before all of the requirements for the rule,
-ie the following is an error:
-
-	@from reject to joe@example.com
-
 Most match operations take an argument, as seen.  Match operators can
 be negated with 'not':
 
@@ -230,7 +220,54 @@ The rule file can have blank lines and comment lines, which start with
 	# this is a comment
 	@data reject all
 
-Rules are evaluated in order and the first matching rule wins.
+Eligible rules are checked in order and the first rule that matches
+determines the results.
+
+When rules are checked
+
+If a rule doesn't have a phase set, it's normally checked at any time
+where it's applicable and where all of the information it needs is
+available. A rule that does things with MAIL FROM addresses will not
+match before @from; a rule that does things with RCPT TO addresses will
+not match before @to (and thus can't be used to, say, reject a MAIL
+FROM). It is an error to specify an explicit phase that is before all
+of the requirements for the rule, ie the following is an error:
+
+	@from reject to joe@example.com
+
+Note that this has significant implications for 'accept' rules.
+An unrestricted 'accept' rule will start matching when all of the
+information it needs becomes available *and then keep matching again
+and again*. Consider a situation where your first rule is:
+
+	accept host .friend.com
+
+This doesn't just accept an EHLO/HELO from your friend; it goes on to
+accept MAIL FROM, RCPT TO, DATA, and then the message itself, because
+this accept rule is checked in all of those phases too and it's going
+to succeed (since it already has). There are two solutions to this;
+you can put all accept rules at the end of the rules, or you can put
+an explicit phase on the accept rule, eg:
+
+	@helo accept host .friend.com
+
+A rule with an explicit phase (even the phase that it normally requires)
+is only checked in that phase.
+
+This issue can also happen with 'stall' or 'reject' rules, but only in
+a slightly different situation. Consider the set of rules:
+
+	@helo accept helo liar.com
+	reject host .enemy.org
+
+The if an enemy.org host HELOs with 'liar.com', the accept rule will
+accept it in HELO and then when it sends a MAIL FROM the reject rule
+will match and refuse it.
+
+If you have only reject or stall rules this can't come up because a
+matching stall or reject rule prevents the conversation from moving
+forward anyways. If you reject at EHLO time, the SMTP conversation will
+never send a valid MAIL FROM to be checked.
 
 Match operators and their arguments
 
