@@ -138,11 +138,11 @@ func dnsGetter(c *Context) (o Option) {
 	if len(c.trans.rdns.inconsist) > 0 {
 		o |= oInconsist
 	}
-	// We have good DNS if none of the above are true. This
-	// implies that we have at least one verified DNS result
+	// We have good DNS if none of the bad things above are true.
+	// This implies that we have at least one verified DNS result
 	// and none that are bad.
-	if o == oZero {
-		o = oGood
+	if o == oExists {
+		o |= oGood
 	}
 	return
 }
