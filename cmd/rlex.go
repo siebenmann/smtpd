@@ -198,7 +198,7 @@ func (i item) String() string {
 	case i.typ == itemEOF:
 		return "EOF"
 	case i.typ == itemEOL:
-		return "EOL\n"
+		return "EOL"
 	case i.typ == itemError:
 		return fmt.Sprintf("ERROR:'%s'", i.val)
 	case i.typ == itemValue:
@@ -346,9 +346,14 @@ func lexSpecial(l *lexer) stateFn {
 		// cracks because we swallow whitespace. Everything else
 		// generates explicit tokens and so will throw a parse
 		// error.
-		if n == ' ' || n == '\t' {
+		// Technically we don't have to check for EOL or EOF
+		// because the parser will error out since those are
+		// distinct tokens, but I think it gives better error
+		// messages to fail the lexing here (or at least it
+		// makes them easier).
+		if n == ' ' || n == '\t' || n == '\n' || n == eof {
 			l.backup()
-			return l.errorf("comma followed by whitespace")
+			return l.errorf("comma followed by whitespace, EOL, or EOF")
 		}
 		return lexLineRunning
 	default:

@@ -6,9 +6,15 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
+// Test that we can lex all of the constructs we expect without an
+// error.
+// Run 'go test -v' to see a dump of the lex stream for this block
+// of things; it will also be printed if we got an error during
+// lexing.
 var aLex = `
 # this is a comment
 accept from a@b.com helo .barney
@@ -16,25 +22,36 @@ accept from a@b.com helo .barney
 message reject to cks@jon.snow
 helo reject helo /a/file host file:something
 reject helo somename (from info@fbi.gov or fred@barney) not to i@addr
-reject greeted helo,ehlo,none,nodots,bareip tls on tls off
+reject helo-has helo,ehlo,none,nodots,bareip tls on tls off
 mailfrom reject dns nodns,inconsistent,noforward address route,quoted,noat
+reject helo-has \
+	ehlo,none dnsbl fred.jim
+reject ip 192.168.0.0/24 ip 127.0.0.2
 
-reject address bad`
+reject address bad
+`
 
-// this function is used to dump the lex stream of a basic parse
-// it's usually off ('test' lower case).
-func testLexing(t *testing.T) {
+func TestLexing(t *testing.T) {
+	var i item
+	var lr []string
 	l := lex(aLex)
-	fmt.Printf("Parsing result:\n")
+	t.Log("Parsing result:")
 	for {
-		i := l.nextItem()
+		i = l.nextItem()
 		l1, l2 := l.lineInfo(i.pos)
-		fmt.Printf(" %v(%d,%d)", i, l1, l2)
-		if i.typ == itemEOF {
+		lr = append(lr, fmt.Sprintf("%v(%d,%d)", i, l1, l2))
+		if i.typ == itemEOL {
+			t.Log(strings.Join(lr, " "))
+			lr = []string{}
+		}
+		if i.typ == itemEOF || i.typ == itemError {
 			break
 		}
 	}
-	fmt.Printf("\n")
+	t.Log(strings.Join(lr, " "))
+	if i.typ != itemEOF {
+		t.Fatalf("lexing did not end with an EOF")
+	}
 }
 
 type lexTest struct {
@@ -77,12 +94,18 @@ var lexTests = []lexTest{
 	{"comma ops", "dns nodns,noforward,ehlo", []item{
 		itm("dns"), itm("nodns"), tComma, itm("noforward"), tComma,
 		itm("ehlo"), tEOF}},
-	{"comma bad", ", nodns", []item{tComma, item{itemError, "comma followed by whitespace", 0}}},
+	{"comma bad", ", nodns", []item{tComma, item{itemError, "comma followed by whitespace, EOL, or EOF", 0}}},
 	{"embedded comment", "stall from @\n # a comment\nreject to @a",
 		[]item{itm("stall"), itm("from"), itv("@"), tEOL,
 			itm("reject"), itm("to"), itv("@a"), tEOF}},
+	// this also tests 'continuing' a blank line
 	{"line continuation", " \\\n stall from @ \\\n  to a@b", []item{
 		itm("stall"), itm("from"), itv("@"), itm("to"), itv("a@b"),
+		tEOF}},
+	{"blank continuation in a middle line", "stall from \\\n   \\\n @",
+		[]item{itm("stall"), itm("from"), itv("@"), tEOF}},
+	{"middle of line backslash", "stall from \\ to a@b", []item{
+		itm("stall"), itm("from"), itv("\\"), itm("to"), itv("a@b"),
 		tEOF}},
 }
 
@@ -151,7 +174,9 @@ func TestAllKeywords(t *testing.T) {
 		// Because we swallow blank lines, EOL does not invert;
 		// it gets plain EOF.
 		// EOF does not map to an actual character, so.
-		if kiv == itemEOF || kiv == itemEOL {
+		// The lexer specifically errors on ,<EOL|EOF>, so we can't
+		// check it either.
+		if kiv == itemEOF || kiv == itemEOL || kiv == itemComma {
 			continue
 		}
 		testitems := []item{item{kiv, string(kc), 0}, tEOF}
