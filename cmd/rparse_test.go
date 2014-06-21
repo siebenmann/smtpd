@@ -12,6 +12,10 @@ import (
 	"testing"
 )
 
+// all of these rules should parse
+// we don't try to match them; this is just a parse test (and then
+// a test that we can round-trip them through stringifying the rule
+// and re-parsing it and the round trip is stable).
 var aParse = `
 accept from a@b
 @data reject to b@c or to fred or from a@b helo barney
@@ -67,30 +71,10 @@ func stringRule(r *Rule) string {
 	}
 }
 
-var allSuccess = `
-accept all
-accept from jim@jones.com to joe@example.com not dns nodns
-accept to joe@ from @.com
-accept dns inconsistent dns noforward
-accept helo-has ehlo tls on
-accept not helo-has nodots from @.net or dns nodns or to @.com
-accept helo-has nodots or (from @jones.com to @example.com)
-accept from jim@jones.com to info@fbi.gov or to joe@example.com
-accept not (from jim@ to @logan)
-accept all or to jim@example.com
-accept not from-has noat
-accept not to-has quoted
-# dns is not good because there are inconsistent and noforward stuff
-accept not dns good
-accept helo .ben
-accept not helo-has bareip
-accept host .b.c
-accept host .f
-# IP tests
-accept ip 192.168.10.3 ip 192.168.10.0/24 ip /ips ip 192.168.010.003
-accept not ip 127.0.0.10
-`
+// ----
+// For many tests of rules evaluation we need a context.
 
+// Will become the synthetic file '/a/file'
 var aList = `# This is a comment
 INFO@FBI.GOV
 root@
@@ -100,6 +84,8 @@ postmaster@Example.Org
 @.barney.net
 # t
 `
+
+// will become the synthetic file '/ips'
 var ipList = `
 127.0.0.0/8
 # this should not generate an error even thought it would in the
@@ -108,6 +94,7 @@ not-valid
 192.168.10.0/24
 `
 
+// Set up our standard context
 func setupFile(c *Context, name, conts string) error {
 	reader := bufio.NewReader(strings.NewReader(conts))
 	a, err := readList(reader)
@@ -152,6 +139,37 @@ func setupContext(t *testing.T) *Context {
 	return c
 }
 
+// -----
+
+// all of the following rules should match with our standard artifical
+// context
+// As a side effect these matches test a number of the getter and
+// matcher functions in rules.go
+var allSuccess = `
+accept all
+accept from jim@jones.com to joe@example.com not dns nodns
+accept to joe@ from @.com
+accept dns inconsistent dns noforward
+accept helo-has ehlo tls on
+accept not helo-has nodots from @.net or dns nodns or to @.com
+accept helo-has nodots or (from @jones.com to @example.com)
+accept from jim@jones.com to info@fbi.gov or to joe@example.com
+accept not (from jim@ to @logan)
+accept all or to jim@example.com
+accept not from-has noat
+accept not to-has quoted
+# dns is not good because there are inconsistent and noforward stuff
+accept not dns good
+accept helo .ben
+accept not helo-has bareip
+accept host .b.c
+accept host .f
+# IP tests
+accept ip 192.168.10.3 ip 192.168.10.0/24 ip /ips ip 192.168.010.003
+accept not ip 127.0.0.10
+`
+
+// Verify that all rules in allSuccess do succeed.
 func TestSuccess(t *testing.T) {
 	c := setupContext(t)
 	rules, err := Parse(allSuccess)
@@ -170,6 +188,7 @@ func TestSuccess(t *testing.T) {
 	}
 }
 
+// verify address matching for a file-based from rule.
 var inAddrs = []string{
 	"INFO@FBI.GOV", "root@fred.com", "random@example.com",
 	"postmaster@example.org", "root@example.com",
@@ -200,6 +219,8 @@ func TestFileAddrMatching(t *testing.T) {
 	}
 }
 
+// Test that we properly set c.rulemiss when a rule evaluation tries
+// to check an empty file.
 func TestEmptyFile(t *testing.T) {
 	c := setupContext(t)
 	rules, e := Parse("accept from file:/empty")
@@ -212,6 +233,8 @@ func TestEmptyFile(t *testing.T) {
 	}
 }
 
+// Test 'helo-has' matching. This implicitly tests a bunch of the
+// correctness of heloGetter() in rules.go.
 var heloTests = []struct {
 	helo, match string
 }{
@@ -229,6 +252,7 @@ var heloTests = []struct {
 	{"", "helo-has none"},
 	{"", "helo-has nodots"},
 	{"fred", "helo-has nodots"},
+	{"fred.jim", "helo-has ehlo not helo-has nodots"},
 }
 
 func TestHeloHas(t *testing.T) {
@@ -244,6 +268,19 @@ func TestHeloHas(t *testing.T) {
 			t.Errorf("HELO '%s' does not match: %s\n", s.helo,
 				s.match)
 		}
+	}
+
+	// Test recognition of HELO vs EHLO. We've already tested
+	// 'helo-has ehlo' above, as smtpd.EHLO is the default helocmd
+	// in our context.
+	c.helocmd = smtpd.HELO
+	c.heloname = "fred.jim"
+	rules, err := Parse("accept helo-has helo")
+	if err != nil {
+		t.Fatalf("error parsing HELO recognition test: %s", err)
+	}
+	if !rules[0].expr.Eval(c) {
+		t.Errorf("helo-has did not see this as a 'HELO' helo vs EHLO\n")
 	}
 }
 
@@ -281,6 +318,8 @@ func TestNotParse(t *testing.T) {
 	}
 }
 
+// Test DNS blocklist checks based on our artificial DNS blocklist cache
+// entries set up in setupContext().
 func TestDnsblHit(t *testing.T) {
 	c := setupContext(t)
 	rules, _ := Parse("accept dnsbl nosuch.domain")

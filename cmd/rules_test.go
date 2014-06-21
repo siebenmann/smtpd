@@ -1,5 +1,10 @@
 //
-//
+// Right now this merely tests some support functions in rules.go and
+// does not attempt to test the main Decide() function. That one is
+// complicated, especially if we want to test the full logic; we'd
+// have to construct some rules and then drive an entire conversation
+// through Decide().
+
 package main
 
 import (
@@ -47,6 +52,7 @@ func TestAddrMatches(t *testing.T) {
 	}
 }
 
+// Hostname matching tests
 var ahMatches = []struct {
 	h, pat string
 }{
@@ -76,6 +82,13 @@ func TestHostMatches(t *testing.T) {
 	}
 }
 
+// Tests for thing -> options set for it functions in rules.go.
+// Note that rparse_test.py also does a certain amount of implicit
+// testing as part of its general match testing.
+
+// Test whether various addresses yield various address options that they
+// should. This is not an exhaustive test of all possibilities, especially
+// of all of the various garbage addresses.
 var aOpts = []struct {
 	addr string
 	opt  Option
@@ -102,6 +115,42 @@ func TestAddrOpts(t *testing.T) {
 		o := getAddrOpts(opt.addr)
 		if o != opt.opt {
 			t.Errorf("address '%s' evaluated to: %v instead of %v\n", opt.addr, o, opt.opt)
+		}
+	}
+}
+
+// Test generation of DNS options for a given set of DNS results.
+// We simply fake the contents of context.trans.rdns because we
+// know that dnsGetter() just looks at list length.
+// We borrow setupContext() from rparse_test.go.
+var dOpts = []struct {
+	ver, nofw, inc bool
+	opt            Option
+}{
+	{true, false, false, oGood | oExists},
+	{false, true, false, oNofwd | oNodns},
+	{false, false, true, oInconsist | oNodns},
+	{false, false, false, oNodns},
+	{true, true, true, oExists | oNofwd | oInconsist},
+	{false, true, true, oNodns | oNofwd | oInconsist},
+}
+
+func TestDnsOpts(t *testing.T) {
+	var s = []string{"a.c"}
+	var choose = func(v bool) []string {
+		if v {
+			return s
+		}
+		return []string{}
+	}
+	c := setupContext(t)
+	for _, opt := range dOpts {
+		c.trans.rdns.verified = choose(opt.ver)
+		c.trans.rdns.nofwd = choose(opt.nofw)
+		c.trans.rdns.inconsist = choose(opt.inc)
+		o := dnsGetter(c)
+		if o != opt.opt {
+			t.Errorf("dns %v/%v/%v evaluated to: %v instead of %v\n", opt.ver, opt.nofw, opt.inc, o, opt.opt)
 		}
 	}
 }
