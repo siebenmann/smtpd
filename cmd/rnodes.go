@@ -108,21 +108,35 @@ type Rule struct {
 	// or similar gimmicks; it's explicitly an error in the
 	// parser.
 
-	// message associated with this rule via 'with message ...'.
+	// 'with' properties associated with this rule
 	message string
+	note    string
+	savedir string
 }
 
+// String() returns the string form of a Rule. This is theoretically
+// a parseable version of the canonical form of the rule.
+//
+// BUG: we don't properly quote strings that need it (ie that contain
+// an embedded ").
 func (r *Rule) String() string {
 	var with string
 	if r.message != "" {
-		with = fmt.Sprintf(" with message \"%s\"", r.message)
+		with = with + fmt.Sprintf(" message \"%s\"", r.message)
+	}
+	if r.note != "" {
+		with = with + fmt.Sprintf(" note \"%s\"", r.note)
+	}
+	if r.savedir != "" {
+		with = with + fmt.Sprintf(" savedir %s", r.savedir)
+	}
+	if with != "" {
+		with = " with" + with
 	}
 	if r.deferto != pAny {
-		return fmt.Sprintf("<%v: %v %v %s%s >", r.requires,
-			r.deferto, r.result, r.expr.String(), with)
+		return fmt.Sprintf("%v %v %s%s", r.deferto, r.result, r.expr.String(), with)
 	} else {
-		return fmt.Sprintf("<%v: %v %s%s >", r.requires, r.result,
-			r.expr.String(), with)
+		return fmt.Sprintf("%v %s%s", r.result, r.expr.String(), with)
 	}
 }
 
@@ -262,8 +276,6 @@ func (m *MatchN) String() string {
 	return fmt.Sprintf("%s %s", m.what, m.arg)
 }
 
-// on an empty list, the entire rule should miss.
-// TODO: not sure!
 func (m *MatchN) Eval(c *Context) Result {
 	plist := c.getMatchList(m.arg)
 	if len(plist) == 0 {

@@ -110,6 +110,8 @@ const (
 	// add-ons
 	itemWith
 	itemMessage
+	itemNote
+	itemSavedir
 
 	// options that do not duplicate keywords
 	itemEhlo
@@ -174,6 +176,8 @@ var keywords = map[string]itemType{
 	// add-ons
 	"with":    itemWith,
 	"message": itemMessage,
+	"note":    itemNote,
+	"savedir": itemSavedir,
 
 	// options
 	"ehlo":         itemEhlo,

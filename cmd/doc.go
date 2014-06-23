@@ -476,21 +476,28 @@ HATTRS is one or more of:
 With options
 
 A rule can be suffixed with 'with ....' to set some options for when
-the rule matches. Right now the only available option is:
+the rule matches. The following options are supported:
 
 	message MESSAGE
 		Use MESSAGE instead of the default message on
-		rejections or stalls.
+		rejections or stalls. If MESSAGE is a multi-line
+		quoted string, the SMTP reply will be a properly done
+		up multi-line message. MESSAGE cannot currently be a
+		file.
 
-If MESSAGE is a multi-line quoted string, the SMTP reply will be a
-properly done up multi-line message. MESSAGE cannot currently be a
-file.
+	note NOTE
+		Write a note to the SMTP log when this rule matches.
+		NOTE cannot contain newlines.
+
+	savedir DIR
+		Set the directory to save the message in, overriding
+		the supplied value for -d (if there is any). It's
+		valid to set savedir on a rule without a -d on the
+		command line.
 
 For example:
 
 	reject dnsbl sbl.spamhaus.org with message "You're SBL listed."
-
-TODO: this should work on accepts too.
 
 What sinksmtp does when rule loading has errors
 

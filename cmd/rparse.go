@@ -409,21 +409,45 @@ func (p *parser) pAndl() (expr Expr, err error) {
 // (for 'with'). We cheat twice; we don't recurse, and right now we
 // know clauses.
 func (p *parser) pWithClause() (bool, error) {
+	var err error
+	var arg string
 	gotone := false
 	for {
-		if p.curtok.typ != itemMessage {
+		ct := p.curtok.typ
+		switch ct {
+		case itemMessage, itemNote, itemSavedir:
+			p.consume()
+			arg, err = p.pArg()
+		default:
 			return gotone, nil
 		}
-		if p.currule.message != "" {
-			return gotone, p.posError("repeated 'message' option in with clause")
-		}
-		gotone = true
-		p.consume()
-		arg, err := p.pArg()
 		if err != nil {
 			return gotone, err
 		}
-		p.currule.message = arg
+		switch ct {
+		case itemMessage:
+			if p.currule.message != "" {
+				return gotone, p.lineError("repeated 'message' option in with clause")
+			}
+			p.currule.message = arg
+		case itemNote:
+			if p.currule.note != "" {
+				return gotone, p.lineError("repeated 'note' option in with clause")
+			}
+			if strings.IndexByte(arg, '\n') != -1 {
+				return gotone, p.lineError("'note' option can't contain newlines")
+			}
+			p.currule.note = arg
+		case itemSavedir:
+			if p.currule.savedir != "" {
+				return gotone, p.lineError("repeated 'savedir' option in with clause")
+			}
+			p.currule.savedir = arg
+		default:
+			// If this happens it's a coding error.
+			panic(fmt.Sprintf("unhandled ct in pWithClause: %v", ct))
+		}
+		gotone = true
 	}
 }
 

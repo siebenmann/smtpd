@@ -377,6 +377,7 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 	var ret Action
 	ret = aNoresult
 	c.dnsblhit = []string{}
+	c.mrule = nil
 
 	// Handle deferred results due to MAIL FROM:<>.
 	// We replace the determined result regardless of what it is,
@@ -464,8 +465,10 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 	// MAIL FROM:<>?
 	if ph == pMfrom && c.from == "" && ret > aAccept {
 		c.defrule = c.mrule
-		// for now we don't clear c.mrule or c.dnsblhit.
-		// maybe we should.
+		c.mrule = nil
+		// we deliberately don't clear c.dnsblhit so that we log
+		// it as soon as possible, even if the connection is then
+		// dropped by the client or whatever.
 		ret = aAccept
 	}
 

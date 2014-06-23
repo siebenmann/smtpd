@@ -285,6 +285,8 @@ type smtpTransaction struct {
 	bodyhash string    // canonical hash of the message body (no headers)
 	when     time.Time // when the email message data was received.
 
+	savedir string // directory to save message to
+
 	// Reflects the current state, so tlson false can convert to
 	// tlson true over time. cipher is valid only if tlson is true.
 	tlson  bool
@@ -404,7 +406,7 @@ func logMessage(prefix string, trans *smtpTransaction, logf io.Writer) {
 func handleMessage(prefix string, trans *smtpTransaction, logf io.Writer) (string, error) {
 	var hash string
 	logMessage(prefix, trans, logf)
-	if savedir == "" {
+	if trans.savedir == "" {
 		return trans.hash, nil
 	}
 	m, mhash := msgDetails(prefix, trans)
@@ -436,7 +438,7 @@ func handleMessage(prefix string, trans *smtpTransaction, logf io.Writer) (strin
 		panic(fmt.Sprintf("unhandled hashtype '%s'", hashtype))
 	}
 
-	tgt := savedir + "/" + hash
+	tgt := trans.savedir + "/" + hash
 	// O_CREATE|O_EXCL will fail if the file already exists, which
 	// is okay with us.
 	fp, err := os.OpenFile(tgt, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0666)
@@ -512,6 +514,21 @@ func pluralRecips(c *Context) string {
 	return "that address"
 }
 
+func doAccept(convo *smtpd.Conn, c *Context, transid string) {
+	switch {
+	case c.mrule != nil && c.mrule.message != "":
+		msg := c.mrule.message
+		if transid != "" {
+			msg += "\nAccepted with ID " + transid
+		}
+		convo.AcceptMsg(msg)
+	case transid != "":
+		convo.AcceptData(transid)
+	default:
+		convo.Accept()
+	}
+}
+
 // Decide what to do and then do it if it is a rejection or a tempfail.
 // If given an id (and it is in the message handling phase) we call
 // RejectData(). This is our convenience driver for the rules engine,
@@ -523,16 +540,42 @@ func decider(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id st
 	res := Decide(ph, evt, c)
 
 	logDnsbls(c)
+	if c.mrule != nil {
+		// The moment a rule sets a savedir, it becomes sticky.
+		// This lets you select a savedir based on eg from matching
+		// instead of having to do games later.
+		if c.mrule.savedir != "" {
+			c.trans.savedir = c.mrule.savedir
+		}
+		// rule notes are deliberately logged every time they hit.
+		// this may be a mistake given EHLO retrying as HELO, but
+		// I'll see.
+		if c.mrule.note != "" && c.trans.log != nil {
+			c.trans.log.Write([]byte(fmt.Sprintf("! rule note: %s\n", c.mrule.note)))
+		}
+	}
 	if res == aNoresult || res == aAccept {
 		return false
 	}
+
+	// Note that since rejection and stalls are not the default state,
+	// we know that c.mrule is set here and don't have to check it for
+	// non-nil. The same is not true for aAccept/aNoresult, which might
+	// have a nil c.mrule.
 	switch res {
 	case aReject:
-		// HACK
+		// This is kind of a hack.
+		// We assume that 'id' is only set when we should report it,
+		// which is kind of safe.
 		if c.mrule.message != "" {
-			convo.RejectMsg(c.mrule.message)
+			msg := c.mrule.message
+			if id != "" {
+				msg += "\nRejected with ID " + id
+			}
+			convo.RejectMsg(msg)
 			return true
 		}
+		// Default messages are kind of intricate.
 		switch {
 		case id != "" && ph == pMessage:
 			convo.RejectMsg("We do not consent to you emailing %s\nRejected with ID %s", pluralRecips(c), id)
@@ -566,6 +609,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	defer nc.Close()
 
 	trans := &smtpTransaction{}
+	trans.savedir = savedir
 	trans.raddr = nc.RemoteAddr()
 	trans.laddr = nc.LocalAddr()
 	prefix := fmt.Sprintf("%d/%d", os.Getpid(), cid)
@@ -677,6 +721,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 				if minphase == "from" {
 					gotsomewhere = true
 				}
+				doAccept(convo, c, "")
 			case smtpd.RCPTTO:
 				if decider(pRto, evt, c, convo, "") {
 					continue
@@ -685,6 +730,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 				if minphase == "to" {
 					gotsomewhere = true
 				}
+				doAccept(convo, c, "")
 			case smtpd.DATA:
 				if decider(pData, evt, c, convo, "") {
 					continue
@@ -692,6 +738,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 				if minphase == "data" {
 					gotsomewhere = true
 				}
+				doAccept(convo, c, "")
 			}
 		case smtpd.GOTDATA:
 			// -minphase=message means 'message
@@ -721,7 +768,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 				if minphase == "accepted" {
 					gotsomewhere = true
 				}
-				convo.AcceptData(transid)
+				doAccept(convo, c, transid)
 			}
 		case smtpd.TLSERROR:
 			// any TLS error means we'll avoid offering TLS
