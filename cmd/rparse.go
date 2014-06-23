@@ -5,7 +5,7 @@
 // our grammar (not fully formal):
 // a file is a sequence of rules; each rule ends at end of line
 //
-// rule  -> [phase] [toall] what andl EOL|EOF
+// rule  -> [phase] what andl [with] EOL|EOF
 // phase -> @HELO | @FROM | @TO | @DATA | @MESSAGE
 // what  -> ACCEPT | REJECT | STALL
 // andl  -> orl [andl]
@@ -20,6 +20,8 @@
 //          FROM|TO|HELO|HOST arg
 //          IP IPADDR|CIDR|FILENAME
 //          DNSBL DOMAIN
+// with  -> WITH clause
+// clause -> MESSAGE arg [clause]
 // arg   -> VALUE
 //          FILENAME
 // arg actually is 'anything', keywords become values in it.
@@ -403,6 +405,47 @@ func (p *parser) pAndl() (expr Expr, err error) {
 	}
 }
 
+// parse: clause
+// (for 'with'). We cheat twice; we don't recurse, and right now we
+// know clauses.
+func (p *parser) pWithClause() (bool, error) {
+	gotone := false
+	for {
+		if p.curtok.typ != itemMessage {
+			return gotone, nil
+		}
+		if p.currule.message != "" {
+			return gotone, p.posError("repeated 'message' option in with clause")
+		}
+		gotone = true
+		p.consume()
+		arg, err := p.pArg()
+		if err != nil {
+			return gotone, err
+		}
+		p.currule.message = arg
+	}
+}
+
+// parse: [with]
+func (p *parser) pWith() error {
+	if p.curtok.typ != itemWith {
+		return nil
+	}
+	p.consume()
+	good, err := p.pWithClause()
+	switch {
+	case err != nil:
+		return err
+	case p.isEol() && !good:
+		return p.posError("empty with clause")
+	case !p.isEol():
+		return p.genError("expecting a with clause")
+	default:
+		return nil
+	}
+}
+
 // parse: [phase]
 var phases = map[itemType]Phase{
 	itemAHelo: pHelo, itemAFrom: pMfrom, itemATo: pRto, itemAData: pData,
@@ -443,12 +486,16 @@ func (p *parser) pRule() (r *Rule, err error) {
 	if err != nil {
 		return nil, err
 	}
+	err = p.pWith()
+	if err != nil {
+		return nil, err
+	}
 	if !p.isEol() {
 		// This is technically 'expecting end of line' but that
 		// is not a useful error. What it really means is that
 		// we ran into something that is not an operation down
 		// in the depths of pTerm and it bubbled up to here.
-		return nil, p.genError("expecting an operation")
+		return nil, p.genError("expecting an operation or 'with'")
 	}
 	if p.currule.expr == nil {
 		return nil, p.lineError("rule needs at least one operation, perhaps 'all'")

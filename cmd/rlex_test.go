@@ -19,16 +19,17 @@ var aLex = `
 # this is a comment
 accept from a@b.com helo .barney
 
-message reject to cks@jon.snow
-helo reject helo /a/file host file:something
+@message reject to cks@jon.snow
+@helo reject helo /a/file host file:something
 reject helo somename (from info@fbi.gov or fred@barney) not to i@addr
 reject helo-has helo,ehlo,none,nodots,bareip tls on tls off
-mailfrom reject dns nodns,inconsistent,noforward address route,quoted,noat
+@from reject dns nodns,inconsistent,noforward address route,quoted,noat
 reject helo-has \
 	ehlo,none dnsbl fred.jim
 reject ip 192.168.0.0/24 ip 127.0.0.2
 
-reject address bad
+reject from bad with message from-bad
+reject ehlo "fred jim"
 `
 
 func TestLexing(t *testing.T) {
@@ -107,6 +108,20 @@ var lexTests = []lexTest{
 	{"middle of line backslash", "stall from \\ to a@b", []item{
 		itm("stall"), itm("from"), itv("\\"), itm("to"), itv("a@b"),
 		tEOF}},
+
+	{"proper quote", "\"fred jim\" from", []item{
+		itv("fred jim"), itm("from"), tEOF}},
+	{"proper quote with escape", "\"fred\\\"bob\"", []item{
+		itv("fred\"bob"), tEOF}},
+	{"quote with non-escaping backslash", "\"fred\\bob\"", []item{
+		itv("fred\\bob"), tEOF}},
+	{"quote defeats comma", "\", \"", []item{itv(", "), tEOF}},
+	{"quote spans lines", "\"fred\njim\n  bob\"", []item{
+		itv("fred\njim\n  bob"), tEOF}},
+	{"unterminated quote", "\"fred jim", []item{
+		item{itemError, "unterminated quoted value", 0}}},
+	{"quote escaping terminator", "\"fred\\\"", []item{
+		item{itemError, "unterminated quoted value", 0}}},
 }
 
 func collect(input string) (items []item) {

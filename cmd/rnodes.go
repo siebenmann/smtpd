@@ -103,18 +103,26 @@ type Rule struct {
 	requires Phase // Rule requires data from this phase; at most pRto now
 	deferto  Phase // Rule wants to be deferred to this phase
 
-	// The rule is that if deferto is set it is always larger than
-	// requires. We don't allow '@from accept to ...' or similar
-	// gimmicks; it's explicitly an error in the parser.
+	// The rule is that if deferto is set it is always equal to or
+	// larger than requires. We don't allow '@from accept to ...'
+	// or similar gimmicks; it's explicitly an error in the
+	// parser.
+
+	// message associated with this rule via 'with message ...'.
+	message string
 }
 
 func (r *Rule) String() string {
+	var with string
+	if r.message != "" {
+		with = fmt.Sprintf(" with message \"%s\"", r.message)
+	}
 	if r.deferto != pAny {
-		return fmt.Sprintf("<%v: %v %v %s >", r.requires,
-			r.deferto, r.result, r.expr.String())
+		return fmt.Sprintf("<%v: %v %v %s%s >", r.requires,
+			r.deferto, r.result, r.expr.String(), with)
 	} else {
-		return fmt.Sprintf("<%v: %v %s >", r.requires, r.result,
-			r.expr.String())
+		return fmt.Sprintf("<%v: %v %s%s >", r.requires, r.result,
+			r.expr.String(), with)
 	}
 }
 

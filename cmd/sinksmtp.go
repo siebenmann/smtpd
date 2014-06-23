@@ -528,6 +528,11 @@ func decider(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id st
 	}
 	switch res {
 	case aReject:
+		// HACK
+		if c.mrule.message != "" {
+			convo.RejectMsg(c.mrule.message)
+			return true
+		}
 		switch {
 		case id != "" && ph == pMessage:
 			convo.RejectMsg("We do not consent to you emailing %s\nRejected with ID %s", pluralRecips(c), id)
@@ -539,7 +544,11 @@ func decider(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id st
 			convo.Reject()
 		}
 	case aStall:
-		convo.Tempfail()
+		if c.mrule.message != "" {
+			convo.TempfailMsg(c.mrule.message)
+		} else {
+			convo.Tempfail()
+		}
 	default:
 		panic("impossible res")
 	}

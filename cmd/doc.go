@@ -176,7 +176,7 @@ Rule files and everything they refer to are loaded and parsed at each
 new connection. See later for what happens if there is an error.
 
 The general form of a rule is:
-	[PHASE] ACTION MATCH-OP [MATCH-OP....]
+	[PHASE] ACTION MATCH-OP [MATCH-OP....] ['with' WITH-OPTS]
 
 The action is one of 'accept', 'reject', or 'stall' (which emits SMTP 4xx
 temporary failure messages). The optional phase says that the rule should
@@ -219,6 +219,13 @@ The rule file can have blank lines and comment lines, which start with
 '#':
 	# this is a comment
 	@data reject all
+
+Rules allow quoted strings, ".. .. ...". Within a quoted string, a
+quote can be escaped with a backslash. Eg:
+
+	reject helo "very \" bogus"
+
+Quoted strings can continue over multiple lines. No '\ ' is needed.
 
 Eligible rules are checked in order and the first rule that matches
 determines the results.
@@ -465,6 +472,25 @@ HATTRS is one or more of:
 
 	ip		The HELO name is an IP address, either bare or
 			properly quoted. Ie this is 'bareip,properip'.
+
+With options
+
+A rule can be suffixed with 'with ....' to set some options for when
+the rule matches. Right now the only available option is:
+
+	message MESSAGE
+		Use MESSAGE instead of the default message on
+		rejections or stalls.
+
+If MESSAGE is a multi-line quoted string, the SMTP reply will be a
+properly done up multi-line message. MESSAGE cannot currently be a
+file.
+
+For example:
+
+	reject dnsbl sbl.spamhaus.org with message "You're SBL listed."
+
+TODO: this should work on accepts too.
 
 What sinksmtp does when rule loading has errors
 

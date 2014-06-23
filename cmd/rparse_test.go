@@ -27,7 +27,7 @@ accept dns good
 reject dns noforward,inconsistent
 accept ip 127.0.0.0/24 ip 127.0.0.10
 reject ip 85.90.187.32/27 or host .edmpoint.com or ehlo .edmpoint.com
-reject dnsbl sbl.spamhaus.org
+reject dnsbl sbl.spamhaus.org with message "listed in the SBL"
 
 # test all options for comma-separated things.
 accept dns good or dns noforward,inconsistent,nodns or dns exists
@@ -62,12 +62,17 @@ func TestParse(t *testing.T) {
 }
 
 // This should be round-trippable.
+// TODO: this duplicates *Rule.String() too much.
 func stringRule(r *Rule) string {
+	var with string
+	if r.message != "" {
+		with = fmt.Sprintf(" with message \"%s\"", r.message)
+	}
 	if r.deferto != pAny {
-		return fmt.Sprintf("%v %v %s", r.deferto, r.result,
-			r.expr.String())
+		return fmt.Sprintf("%v %v %s%s", r.deferto, r.result,
+			r.expr.String(), with)
 	} else {
-		return fmt.Sprintf("%v %s", r.result, r.expr.String())
+		return fmt.Sprintf("%v %s%s", r.result, r.expr.String(), with)
 	}
 }
 
@@ -307,6 +312,11 @@ accept host fred or dns fred
 accept dnsbl file:/a/somewhere
 accept dnsbl host
 accept dnsbl has-no-dots
+accept all with
+accept all with message
+accept all with message fred message
+accept all with message fred message barney
+accept with message fred
 @from accept to @fbi.gov`
 
 func TestNotParse(t *testing.T) {

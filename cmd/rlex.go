@@ -107,6 +107,10 @@ const (
 	itemIp
 	itemDnsbl
 
+	// add-ons
+	itemWith
+	itemMessage
+
 	// options that do not duplicate keywords
 	itemEhlo
 	itemNone
@@ -166,6 +170,10 @@ var keywords = map[string]itemType{
 	"dns":      itemDns,
 	"ip":       itemIp,
 	"dnsbl":    itemDnsbl,
+
+	// add-ons
+	"with":    itemWith,
+	"message": itemMessage,
 
 	// options
 	"ehlo":         itemEhlo,
@@ -267,6 +275,13 @@ func (l *lexer) emit(t itemType) {
 	l.start = l.pos
 }
 
+// emit a given fully specified token to the lexer channel
+// this is used to emit quoted strings.
+func (l *lexer) emitString(t itemType, s string) {
+	l.items <- item{t, s, l.start}
+	l.start = l.pos
+}
+
 // emit an error to the lexer channel *AND* return nil as the next
 // lexer step. This is a hybrid function
 func (l *lexer) errorf(format string, args ...interface{}) stateFn {
@@ -351,6 +366,12 @@ func lexSpecial(l *lexer) stateFn {
 		// distinct tokens, but I think it gives better error
 		// messages to fail the lexing here (or at least it
 		// makes them easier).
+		// TODO: this is really the wrong handling of comma.
+		// Comma by itself should be left alone and we should do
+		// special treatment only of 'word,< |\t|\n|EOF>'.
+		// As it is we've turned comma into a very special thing
+		// that cannot be used as an ordinary value under almost
+		// any circumstance; instead you have to quote it.
 		if n == ' ' || n == '\t' || n == '\n' || n == eof {
 			l.backup()
 			return l.errorf("comma followed by whitespace, EOL, or EOF")
@@ -391,6 +412,63 @@ func lexWord(l *lexer) stateFn {
 	return lexLineRunning
 }
 
+// Lex a quote. Within a quote, \" translates to ".
+// We enter lexQuote with the starting " *not* consumed.
+// Quotes are always itemValues.
+// TODO: this is probably a bad algorithm, but it is what it is.
+func lexQuote(l *lexer) stateFn {
+	// qparts is used to accumulate chunks of quoted input. We use
+	// it to properly handle quoted "'s, ie \", which must be rewritten
+	// to ".
+	var qparts []string
+	var lookat int
+
+	// advance past quote. we don't eat the quote with l.swallow()
+	// because we want our start position to point to it until the
+	// whole thing has been successfully processed; this way the
+	// right start position will appear in emitted items.
+	l.next()
+
+	lookat = l.pos
+	for {
+		// EOF check
+		if lookat >= len(l.input) {
+			break
+		}
+		// does the quote just run to EOF?
+		idx := strings.IndexAny(l.input[lookat:], "\\\"")
+		if idx == -1 {
+			break
+		}
+		// okay, we can look at what we found
+		apos := lookat + idx
+
+		// end of quote
+		if l.input[apos] == '"' {
+			qparts = append(qparts, l.input[l.pos:apos])
+			l.pos = apos + 1
+			l.emitString(itemValue, strings.Join(qparts, ""))
+			return lexLineRunning
+		}
+
+		// possible quoted string. Check. If not, skip it.
+		if !strings.HasPrefix(l.input[apos:], "\\\"") {
+			lookat = apos + 1
+			continue
+		}
+
+		// real \" sequence; eat it
+		qparts = append(qparts, l.input[l.pos:apos])
+		qparts = append(qparts, "\"")
+		l.pos = apos + 2
+		lookat = l.pos
+	}
+
+	// this is our error case.
+	l.errorf("unterminated quoted value")
+	return nil
+}
+
 // Within a line, move forward to the next non-whitespace and dispatch
 // to handling either a special or a word. We also eat line continuations
 // (which must be literally \<newline>, no whitespace between the two).
@@ -405,6 +483,8 @@ func lexLineRunning(l *lexer) stateFn {
 		return lexLineRunning
 	case specials[r] != itemError:
 		return lexSpecial
+	case r == '"':
+		return lexQuote
 	default:
 		return lexWord
 	}
@@ -435,6 +515,8 @@ func lexLineStart(l *lexer) stateFn {
 		return lexSpecial
 	}
 	switch r {
+	case '"':
+		return lexQuote
 	case '#':
 		l.next()
 		return lexComment
