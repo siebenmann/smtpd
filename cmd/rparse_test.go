@@ -134,11 +134,11 @@ func setupContext(t *testing.T) *Context {
 
 	err := setupFile(c, "/a/file", aList)
 	if err != nil {
-		t.Fatalf("Error during read: %#v", err)
+		t.Fatalf("Error during read: %v", err)
 	}
 	err = setupFile(c, "/ips", ipList)
 	if err != nil {
-		t.Fatalf("Error during iplist read: %#v", err)
+		t.Fatalf("Error during iplist read: %v", err)
 	}
 	c.files["/empty"] = []string{}
 	return c
@@ -337,7 +337,7 @@ func TestDnsblHit(t *testing.T) {
 		t.Fatalf("did not hit in nosuch.domain")
 	}
 	if len(c.dnsblhit) != 1 && c.dnsblhit[0] != "nosuch.domain" {
-		t.Fatalf("did not list nosuch.domain in c.dnsblhit:\n\t%#v\n", c.dnsblhit)
+		t.Fatalf("did not list nosuch.domain in c.dnsblhit:\n\t%v\n", c.dnsblhit)
 	}
 	c.dnsblhit = []string{}
 	rules, _ = Parse("accept dnsbl notthere.domi")
@@ -345,6 +345,6 @@ func TestDnsblHit(t *testing.T) {
 		t.Fatalf("did hit for notthere.domi")
 	}
 	if len(c.dnsblhit) != 0 {
-		t.Fatalf("c.dnsblhit is not empty after notthere.domi test:\n\t%#v\n", c.dnsblhit)
+		t.Fatalf("c.dnsblhit is not empty after notthere.domi test:\n\t%v\n", c.dnsblhit)
 	}
 }

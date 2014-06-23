@@ -17,7 +17,7 @@ func TestLoader(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(basiclist))
 	a, err := readList(reader)
 	if err != nil {
-		t.Fatalf("Error during read: %#v", err)
+		t.Fatalf("Error during read: %v", err)
 	}
 	sort.Strings(a)
 	for _, p := range present {
