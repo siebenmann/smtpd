@@ -537,6 +537,33 @@ func (c *Conn) Accept() {
 	c.replied = true
 }
 
+// AcceptMsg accepts MAIL FROM, RCPT TO, DATA, or message bodies with
+// the given fmt.Printf style message that you supply. The generated
+// message may include embedded newlines for a multi-line reply.
+// This cannot be applied to EHLO/HELO messages; if called for one
+// of them, it is equivalent to Accept().
+func (c *Conn) AcceptMsg(format string, elems ...interface{}) {
+	if c.curcmd == HELO || c.curcmd == EHLO || c.replied {
+		// We can't apply to EHLO/HELO because those have
+		// special formatting requirements, especially EHLO.
+		c.Accept()
+		return
+	}
+	oldstate := c.state
+	c.state = c.nstate
+	switch c.curcmd {
+	case MAILFROM, RCPTTO:
+		c.replyMulti(250, format, elems...)
+	case DATA:
+		if oldstate == sRcpt {
+			c.replyMulti(354, format, elems...)
+		} else {
+			c.replyMulti(250, format, elems...)
+		}
+	}
+	c.replied = true
+}
+
 // AcceptData accepts a message (ie, a post-DATA blob) with an ID that
 // is reported to the client in the 2xx message. It only does anything
 // when the Conn needs to reply to a DATA blob.
@@ -575,7 +602,7 @@ func (c *Conn) Reject() {
 
 // RejectMsg rejects the current SMTP command with the fmt.Printf
 // style message that you supply. The generated message may include
-// embedded newlines for a mutli-line reply.
+// embedded newlines for a multi-line reply.
 func (c *Conn) RejectMsg(format string, elems ...interface{}) {
 	switch c.curcmd {
 	case HELO, EHLO, MAILFROM, RCPTTO:
