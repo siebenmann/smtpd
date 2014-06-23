@@ -515,9 +515,9 @@ func pluralRecips(c *Context) string {
 }
 
 func doAccept(convo *smtpd.Conn, c *Context, transid string) {
+	msg := c.withprops["message"]
 	switch {
-	case c.mrule != nil && c.mrule.message != "":
-		msg := c.mrule.message
+	case msg != "":
 		if transid != "" {
 			msg += "\nAccepted with ID " + transid
 		}
@@ -540,35 +540,29 @@ func decider(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id st
 	res := Decide(ph, evt, c)
 
 	logDnsbls(c)
-	if c.mrule != nil {
-		// The moment a rule sets a savedir, it becomes sticky.
-		// This lets you select a savedir based on eg from matching
-		// instead of having to do games later.
-		if c.mrule.savedir != "" {
-			c.trans.savedir = c.mrule.savedir
-		}
-		// rule notes are deliberately logged every time they hit.
-		// this may be a mistake given EHLO retrying as HELO, but
-		// I'll see.
-		if c.mrule.note != "" && c.trans.log != nil {
-			c.trans.log.Write([]byte(fmt.Sprintf("! rule note: %s\n", c.mrule.note)))
-		}
+	// The moment a rule sets a savedir, it becomes sticky.
+	// This lets you select a savedir based on eg from matching
+	// instead of having to do games later.
+	if sd := c.withprops["savedir"]; sd != "" {
+		c.trans.savedir = sd
+	}
+	// rule notes are deliberately logged every time they hit.
+	// this may be a mistake given EHLO retrying as HELO, but
+	// I'll see.
+	if note := c.withprops["note"]; note != "" {
+		c.trans.log.Write([]byte(fmt.Sprintf("! rule note: %s\n", note)))
 	}
 	if res == aNoresult || res == aAccept {
 		return false
 	}
 
-	// Note that since rejection and stalls are not the default state,
-	// we know that c.mrule is set here and don't have to check it for
-	// non-nil. The same is not true for aAccept/aNoresult, which might
-	// have a nil c.mrule.
+	msg := c.withprops["message"]
 	switch res {
 	case aReject:
 		// This is kind of a hack.
 		// We assume that 'id' is only set when we should report it,
 		// which is kind of safe.
-		if c.mrule.message != "" {
-			msg := c.mrule.message
+		if msg != "" {
 			if id != "" {
 				msg += "\nRejected with ID " + id
 			}
@@ -587,8 +581,8 @@ func decider(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id st
 			convo.Reject()
 		}
 	case aStall:
-		if c.mrule.message != "" {
-			convo.TempfailMsg(c.mrule.message)
+		if msg != "" {
+			convo.TempfailMsg(msg)
 		} else {
 			convo.Tempfail()
 		}

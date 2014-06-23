@@ -29,6 +29,7 @@ accept ip 127.0.0.0/24 ip 127.0.0.10
 reject ip 85.90.187.32/27 or host .edmpoint.com or ehlo .edmpoint.com
 reject dnsbl sbl.spamhaus.org with message "listed in the SBL" \
 		savedir jim note barney
+set-with all with note "I am here"
 
 # test all options for comma-separated things.
 accept dns good or dns noforward,inconsistent,nodns or dns exists
@@ -307,6 +308,7 @@ accept all with savedir fred savedir barney
 accept with message fred
 accept all with note "embedded newline
 	is here"
+set-with all
 @from accept to @fbi.gov`
 
 func TestNotParse(t *testing.T) {

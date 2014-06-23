@@ -178,10 +178,10 @@ new connection. See later for what happens if there is an error.
 The general form of a rule is:
 	[PHASE] ACTION MATCH-OP [MATCH-OP....] ['with' WITH-OPTS]
 
-The action is one of 'accept', 'reject', or 'stall' (which emits SMTP 4xx
-temporary failure messages). The optional phase says that the rule should
-only be checked and take effect in that phase of the SMTP transaction
-and is one of:
+The action is one of 'accept', 'reject', 'stall' (which emits SMTP 4xx
+temporary failure messages), or 'set-with' (which simply sets with
+options). The optional phase says that the rule should only be checked
+and take effect in that phase of the SMTP transaction and is one of:
 
 	@helo @from @to @data @message
 
@@ -227,8 +227,26 @@ quote can be escaped with a backslash. Eg:
 
 Quoted strings can continue over multiple lines. No '\ ' is needed.
 
-Eligible rules are checked in order and the first rule that matches
-determines the results.
+Eligible rules are checked in order and the first non 'set-with' rule
+that matches determines the results. A matching 'set-with' rule
+doesn't stop matching, it simply sets (default) with options. These
+options can be overridden by a later 'set-with' rule or by the actual
+matching rule.
+
+Note especially that this means set-with rule order matters and the
+last matching set-with rule for a particular with option is what
+controls what that option is set to. For example:
+
+	set-with from @a.b with message "Hi there"
+	set-with all with message "You are here"
+
+This will set the SMTP success, failure, or stall message to 'You are
+here' even for a MAIL FROM with a domain of a.b, because the 'all'
+rule comes after the from-restricted rule. Yes, this is probably
+confusing.
+
+It is an error to specify a 'set-with' rule that has no 'with ...'
+options. Since such a rule is pointless it's assumed to be a mistake.
 
 When rules are checked
 
@@ -498,6 +516,9 @@ the rule matches. The following options are supported:
 For example:
 
 	reject dnsbl sbl.spamhaus.org with message "You're SBL listed."
+
+For technical reasons, 'message' is ineffective for the replies to
+HELO and EHLO SMTP commands.
 
 What sinksmtp does when rule loading has errors
 

@@ -414,8 +414,12 @@ func (p *parser) pWithClause() (bool, error) {
 	gotone := false
 	for {
 		ct := p.curtok.typ
+		cv := p.curtok.val
 		switch ct {
 		case itemMessage, itemNote, itemSavedir:
+			if p.currule.withprops[cv] != "" {
+				return gotone, p.posError(fmt.Sprintf("repeated '%s' option in with clause", cv))
+			}
 			p.consume()
 			arg, err = p.pArg()
 		default:
@@ -424,29 +428,8 @@ func (p *parser) pWithClause() (bool, error) {
 		if err != nil {
 			return gotone, err
 		}
-		switch ct {
-		case itemMessage:
-			if p.currule.message != "" {
-				return gotone, p.lineError("repeated 'message' option in with clause")
-			}
-			p.currule.message = arg
-		case itemNote:
-			if p.currule.note != "" {
-				return gotone, p.lineError("repeated 'note' option in with clause")
-			}
-			if strings.IndexByte(arg, '\n') != -1 {
-				return gotone, p.lineError("'note' option can't contain newlines")
-			}
-			p.currule.note = arg
-		case itemSavedir:
-			if p.currule.savedir != "" {
-				return gotone, p.lineError("repeated 'savedir' option in with clause")
-			}
-			p.currule.savedir = arg
-		default:
-			// If this happens it's a coding error.
-			panic(fmt.Sprintf("unhandled ct in pWithClause: %v", ct))
-		}
+
+		p.currule.withprops[cv] = arg
 		gotone = true
 	}
 }
@@ -490,10 +473,11 @@ func (p *parser) pPhase() {
 // word start in here. As a result we ignore this possibility.
 var actions = map[itemType]Action{
 	itemAccept: aAccept, itemReject: aReject, itemStall: aStall,
+	itemSetWith: aNoresult,
 }
 
 func (p *parser) pRule() (r *Rule, err error) {
-	p.currule = &Rule{}
+	p.currule = newRule()
 	// bail if we are sitting on an EOF.
 	if p.curtok.typ == itemEOF {
 		return nil, nil
@@ -523,6 +507,9 @@ func (p *parser) pRule() (r *Rule, err error) {
 	}
 	if p.currule.expr == nil {
 		return nil, p.lineError("rule needs at least one operation, perhaps 'all'")
+	}
+	if p.currule.result == aNoresult && len(p.currule.withprops) == 0 {
+		return nil, p.lineError("'set-with' rule with no with options")
 	}
 	// we check for errors before consuming the EOL so that
 	// the line numbers come out right in error messages.

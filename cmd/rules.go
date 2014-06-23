@@ -29,12 +29,14 @@ type Context struct {
 	// The set of rules used for this context.
 	ruleset []*Rule
 
-	// the specific rule that matched:
-	mrule *Rule
+	// accumulated properties set through matching
+	withprops map[string]string
 
 	// if we defer an action due to handling MAIL FROM:<>, this is
-	// the matching rule
-	defrule *Rule
+	// the deferred information
+	defresult   Action
+	defdnsblhit []string
+	defprops    map[string]string
 
 	// A map of loaded files. Files are loaded as lists. An empty
 	// list means the file could not be loaded.
@@ -362,10 +364,10 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 	case pHelo:
 		c.helocmd = evt.Cmd
 		c.heloname = evt.Arg
-		c.defrule = nil
+		c.defresult = aError
 	case pMfrom:
 		c.from = evt.Arg
-		c.defrule = nil
+		c.defresult = aError
 	case pRto:
 		c.rcptto = evt.Arg
 	case pData, pMessage:
@@ -377,7 +379,7 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 	var ret Action
 	ret = aNoresult
 	c.dnsblhit = []string{}
-	c.mrule = nil
+	c.withprops = make(map[string]string)
 
 	// Handle deferred results due to MAIL FROM:<>.
 	// We replace the determined result regardless of what it is,
@@ -392,13 +394,10 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 	// is RSET, the result will be cleared in our initial section.
 	// Implicity ph >= pRto, really ph == pRto, because we only set
 	// c.deferred in pMfrom.
-	if c.defrule != nil {
-		// we re-run the rule to repopulate dnsblhit
-		// this doesn't currently matter in sinksmtp but it might
-		// someday.
-		c.defrule.expr.Eval(c)
-		c.mrule = c.defrule
-		return c.defrule.result
+	if c.defresult >= aAccept {
+		c.dnsblhit = c.defdnsblhit
+		c.withprops = c.defprops
+		return c.defresult
 	}
 
 	//fmt.Printf("running in %s (old %s)\n", ph, c.last)
@@ -452,10 +451,14 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 			continue
 		}
 		if res {
-			ret = r.result
-			c.mrule = r
+			for k, v := range r.withprops {
+				c.withprops[k] = v
+			}
 			//fmt.Printf(" matched and: %v\n", ret)
-			break
+			if r.result >= aAccept {
+				ret = r.result
+				break
+			}
 		}
 
 		//fmt.Printf("\n")
@@ -464,8 +467,10 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 	// Do we need to defer our result in order to accept a
 	// MAIL FROM:<>?
 	if ph == pMfrom && c.from == "" && ret > aAccept {
-		c.defrule = c.mrule
-		c.mrule = nil
+		c.defresult = ret
+		c.defprops = c.withprops
+		c.defdnsblhit = c.dnsblhit
+		c.withprops = make(map[string]string)
 		// we deliberately don't clear c.dnsblhit so that we log
 		// it as soon as possible, even if the connection is then
 		// dropped by the client or whatever.

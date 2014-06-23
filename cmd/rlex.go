@@ -88,6 +88,7 @@ const (
 	itemAccept
 	itemReject
 	itemStall
+	itemSetWith
 
 	// expression bits
 	itemOr
@@ -151,9 +152,10 @@ var keywords = map[string]itemType{
 	"@message": itemAMessage,
 
 	// actions
-	"accept": itemAccept,
-	"reject": itemReject,
-	"stall":  itemStall,
+	"accept":   itemAccept,
+	"reject":   itemReject,
+	"stall":    itemStall,
+	"set-with": itemSetWith,
 
 	// ops
 	"or":  itemOr,

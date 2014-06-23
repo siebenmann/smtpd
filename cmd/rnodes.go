@@ -47,7 +47,7 @@ const (
 
 var aMap = map[Action]string{
 	aError: "ERROR", aAccept: "accept", aReject: "reject", aStall: "stall",
-	aNoresult: "no result",
+	aNoresult: "set-with",
 }
 
 func (a Action) String() string {
@@ -109,9 +109,12 @@ type Rule struct {
 	// parser.
 
 	// 'with' properties associated with this rule
-	message string
-	note    string
-	savedir string
+	withprops map[string]string
+}
+
+func newRule() *Rule {
+	r := &Rule{withprops: make(map[string]string)}
+	return r
 }
 
 // String() returns the string form of a Rule. This is theoretically
@@ -121,14 +124,13 @@ type Rule struct {
 // an embedded ").
 func (r *Rule) String() string {
 	var with string
-	if r.message != "" {
-		with = with + fmt.Sprintf(" message \"%s\"", r.message)
+	var keys []string
+	for k := range r.withprops {
+		keys = append(keys, k)
 	}
-	if r.note != "" {
-		with = with + fmt.Sprintf(" note \"%s\"", r.note)
-	}
-	if r.savedir != "" {
-		with = with + fmt.Sprintf(" savedir %s", r.savedir)
+	sort.Strings(keys)
+	for _, k := range keys {
+		with += fmt.Sprintf(" %s \"%s\"", k, r.withprops[k])
 	}
 	if with != "" {
 		with = " with" + with
