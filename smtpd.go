@@ -291,6 +291,9 @@ var states = map[Command]struct {
 
 // Limits has the time and message limits for a Conn, as well as some
 // additional options.
+//
+// A Conn always accepts 'BODY=[7BIT|8BITMIME]' as the sole MAIL FROM
+// parameter, since it advertises support for 8BITMIME.
 type Limits struct {
 	CmdInput time.Duration // client commands, eg MAIL FROM
 	MsgInput time.Duration // total time to get the email message itself
@@ -322,6 +325,10 @@ var DefaultLimits = Limits{
 // false).
 //
 // Note that this structure cannot be created by hand. Call NewConn.
+//
+// Conn connections advertise support for PIPELINING, 8BITMIME, and
+// also STARTTLS if a TLS certificate has been added through
+// Conn.AddTLS().
 //
 // TODO: this structure is a mess. Clean it up somehow.
 type Conn struct {
@@ -504,6 +511,9 @@ func (c *Conn) Accept() {
 		c.reply("250 %s Hello %v", c.local, c.conn.RemoteAddr())
 	case EHLO:
 		c.reply("250-%s Hello %v", c.local, c.conn.RemoteAddr())
+		// We advertise 8BITMIME per
+		// http://cr.yp.to/smtp/8bitmime.html
+		c.reply("250-8BITMIME")
 		c.reply("250-PIPELINING")
 		// STARTTLS RFC says: MUST NOT advertise STARTTLS
 		// after TLS is on.
@@ -638,6 +648,14 @@ func (c *Conn) Tempfail() {
 		c.reply("450 Not available")
 	}
 	c.replied = true
+}
+
+// mimeParam() returns true if the parameter argument of a MAIL FROM
+// is what we expect for a client exploiting our advertisement of
+// 8BITMIME.
+func mimeParam(l ParsedLine) bool {
+	return l.Cmd == MAILFROM &&
+		(l.Params == "BODY=7BIT" || l.Params == "BODY=8BITMIME")
 }
 
 // Next returns the next high-level event from the SMTP connection.
@@ -818,7 +836,7 @@ func (c *Conn) Next() EventInfo {
 		// now is all of them. We reject with the RFC-correct
 		// reply instead of a generic one, so we can't use
 		// c.Reject().
-		if res.Params != "" && c.limits.NoParams {
+		if res.Params != "" && c.limits.NoParams && !mimeParam(res) {
 			c.reply("504 Command parameter not implemented")
 			c.replied = true
 			continue

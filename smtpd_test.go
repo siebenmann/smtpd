@@ -227,6 +227,7 @@ QUIT
 `
 var basicServer = `220 localhost go-smtpd
 250-localhost Hello 127.10.10.100:56789
+250-8BITMIME
 250-PIPELINING
 250 HELP
 250 Okay, I'll believe you for now
@@ -272,6 +273,7 @@ var sequenceServer = `220 localhost go-smtpd
 250 Okay
 503 Out of sequence command
 250-localhost Hello 127.10.10.100:56789
+250-8BITMIME
 250-PIPELINING
 250 HELP
 250 Okay

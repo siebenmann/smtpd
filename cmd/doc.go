@@ -1,8 +1,8 @@
 /*
 Sinksmtp is a sinkhole SMTP server. It accepts things and files them
 away, or perhaps refuses things for you. It can log detailed transactions
-if desired. Messages are received in all 8 bits, although we don't
-advertise 8BITMIME.
+if desired. Messages are received in all 8 bits (and we do advertise
+8BITMIME, following the advice of http://cr.yp.to/smtp/8bitmime.html).
 
 usage: sinksmtp [options] [host]:port [[host]:port ...]
 

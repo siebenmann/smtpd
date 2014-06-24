@@ -34,6 +34,8 @@ are low because his sinkhole SMTP server doesn't currently need them.
 
 Smtpd supports PIPELINING by paying no attention to people who do it
 anyways and supports STARTTLS if you provide a certificate and a key.
+It advertises 8BITMIME and accepts the relevant MAIL FROM parameter;
+regardless of what clients do, messages are received in all 8 bits.
 It rejects VRFY and EXPN attempts.
 
 References:
