@@ -5,26 +5,33 @@
 // our grammar (not fully formal):
 // a file is a sequence of rules; each rule ends at end of line
 //
-// rule  -> [phase] what andl [with] EOL|EOF
-// phase -> @HELO | @FROM | @TO | @DATA | @MESSAGE
-// what  -> ACCEPT | REJECT | STALL
-// andl  -> orl [andl]
-// orl   -> term [OR orl]
-// term  -> NOT term
-//          ( andl )
-//          ALL
-//          TLS ON|OFF
-//          DNS DNS-OPT[,DNS-OPT]
-//          HELO-HAS HELO-OPT[,HELO-OPT]
-//          FROM-HAS|TO-HAS ADDR-OPT[,ADDR-OPT]
-//          FROM|TO|HELO|HOST arg
-//          IP IPADDR|CIDR|FILENAME
-//          DNSBL DOMAIN
-// with  -> WITH clause
-// clause -> MESSAGE arg [clause]
-// arg   -> VALUE
-//          FILENAME
+// rule    -> [phase] what andl [with] EOL|EOF
+// rclause -> andl [with] [rend rclause]
+// rend    -> ';' EOL | ';'
+// phase   -> @HELO | @FROM | @TO | @DATA | @MESSAGE
+// what    -> ACCEPT | REJECT | STALL
+// andl    -> orl [andl]
+// orl     -> term [OR orl]
+// term    -> NOT term
+//            ( andl )
+//            ALL
+//            TLS ON|OFF
+//            DNS DNS-OPT[,DNS-OPT]
+//            HELO-HAS HELO-OPT[,HELO-OPT]
+//            FROM-HAS|TO-HAS ADDR-OPT[,ADDR-OPT]
+//            FROM|TO|HELO|HOST arg
+//            IP IPADDR|CIDR|FILENAME
+//            DNSBL DOMAIN
+// with    -> WITH clause
+// wclause -> wterm [wclause]
+// wterm   -> MESSAGE arg
+//            NOTE arg
+//            SAVEDIR arg
+// arg     -> VALUE
+//            FILENAME
 // arg actually is 'anything', keywords become values in it.
+//
+// TODO: SAVEDIR should take only a FILENAME
 
 package main
 
@@ -62,6 +69,11 @@ func (p *parser) consume() {
 // isEol() is true at logical end of line, which includes EOF.
 func (p *parser) isEol() bool {
 	return p.curtok.typ == itemEOL || p.curtok.typ == itemEOF
+}
+
+// isERule() is true at logical end of line and at ';'
+func (p *parser) isERule() bool {
+	return p.isEol() || p.curtok.typ == itemSemicolon
 }
 
 // generate errors in various forms. the full form is for 'we expected Y
@@ -365,7 +377,7 @@ func (p *parser) pOrl() (expr Expr, err error) {
 		// or we hit something that should have been a term but
 		// isn't. We need to give different errors or I get really
 		// confused.
-		if p.isEol() || p.curtok.typ == itemRparen {
+		if p.isERule() || p.curtok.typ == itemRparen {
 			return nil, p.posError("empty right side of an OR")
 		}
 		return nil, p.genError("expecting match operation")
@@ -405,10 +417,10 @@ func (p *parser) pAndl() (expr Expr, err error) {
 	}
 }
 
-// parse: clause
-// (for 'with'). We cheat twice; we don't recurse, and right now we
-// know clauses.
-func (p *parser) pWithClause() (bool, error) {
+// parse: wclause, including wterm
+// we cheat twice: we parse both wclause and wterm in this, and we don't
+// recurse.
+func (p *parser) pWClause(rc *RClause) (bool, error) {
 	var err error
 	var arg string
 	gotone := false
@@ -417,7 +429,7 @@ func (p *parser) pWithClause() (bool, error) {
 		cv := p.curtok.val
 		switch ct {
 		case itemMessage, itemNote, itemSavedir:
-			if p.currule.withprops[cv] != "" {
+			if rc.withs[cv] != "" {
 				return gotone, p.posError(fmt.Sprintf("repeated '%s' option in with clause", cv))
 			}
 			p.consume()
@@ -429,24 +441,24 @@ func (p *parser) pWithClause() (bool, error) {
 			return gotone, err
 		}
 
-		p.currule.withprops[cv] = arg
+		rc.withs[cv] = arg
 		gotone = true
 	}
 }
 
 // parse: [with]
-func (p *parser) pWith() error {
+func (p *parser) pWith(rc *RClause) error {
 	if p.curtok.typ != itemWith {
 		return nil
 	}
 	p.consume()
-	good, err := p.pWithClause()
+	good, err := p.pWClause(rc)
 	switch {
 	case err != nil:
 		return err
-	case p.isEol() && !good:
+	case p.isERule() && !good:
 		return p.posError("empty with clause")
-	case !p.isEol():
+	case !p.isERule():
 		return p.genError("expecting a with clause")
 	default:
 		return nil
@@ -467,6 +479,52 @@ func (p *parser) pPhase() {
 	}
 }
 
+// parse: rclause
+// As is traditional, we cheat by not recursing.
+func (p *parser) pRClause() error {
+	var err error
+	for {
+		rc := newRClause()
+		rc.expr, err = p.pAndl()
+		if err != nil {
+			return err
+		}
+		err = p.pWith(rc)
+		if err != nil {
+			return err
+		}
+		if !p.isERule() {
+			// This is technically 'expecting end of line' but that
+			// is not a useful error. What it really means is that
+			// we ran into something that is not an operation down
+			// in the depths of pTerm and it bubbled up to here.
+			return p.genError("expecting an operation or 'with'")
+		}
+		if rc.expr == nil {
+			return p.lineError("rule needs at least one operation, perhaps 'all'")
+		}
+		p.currule.addclause(rc)
+		if p.currule.result == aNoresult && len(rc.withs) == 0 {
+			return p.lineError("'set-with' rule with no with options")
+		}
+
+		// At this point, the current token must be ';' or EOF|EOL.
+		// If it is EOF|EOL, we are done parsing rule clauses and
+		// we escape.
+		if p.isEol() {
+			return nil
+		}
+
+		// current token must be ';'. Eat it and continue
+		// accumulating more rule clauses, optionally eating
+		// an EOL immediately after it too.
+		p.consume()
+		if p.curtok.typ == itemEOL {
+			p.consume()
+		}
+	}
+}
+
 // Parse a rule. A rule is [phase] what [orl]
 // *rules are the only thing that consume end of line markers*
 // the lexer does not feed us empty lines, so there must be a
@@ -477,7 +535,8 @@ var actions = map[itemType]Action{
 }
 
 func (p *parser) pRule() (r *Rule, err error) {
-	p.currule = newRule()
+	p.currule = &Rule{}
+
 	// bail if we are sitting on an EOF.
 	if p.curtok.typ == itemEOF {
 		return nil, nil
@@ -490,29 +549,20 @@ func (p *parser) pRule() (r *Rule, err error) {
 	}
 	p.currule.result = actions[ct]
 	p.consume()
-	p.currule.expr, err = p.pAndl()
+
+	err = p.pRClause()
 	if err != nil {
 		return nil, err
 	}
-	err = p.pWith()
-	if err != nil {
-		return nil, err
-	}
-	if !p.isEol() {
-		// This is technically 'expecting end of line' but that
-		// is not a useful error. What it really means is that
-		// we ran into something that is not an operation down
-		// in the depths of pTerm and it bubbled up to here.
-		return nil, p.genError("expecting an operation or 'with'")
-	}
-	if p.currule.expr == nil {
-		return nil, p.lineError("rule needs at least one operation, perhaps 'all'")
-	}
-	if p.currule.result == aNoresult && len(p.currule.withprops) == 0 {
-		return nil, p.lineError("'set-with' rule with no with options")
-	}
+
+	// pRClause can only return a nil err if we are sitting on an
+	// acceptable EOL or EOF. The only remaining error is a phase
+	// error of explicit phase < required phase.
 	// we check for errors before consuming the EOL so that
 	// the line numbers come out right in error messages.
+	// TODO: we should really save the position at the start of the rule
+	// for this; for multi-line rules we report the line number of the
+	// *end* of the rule.
 	if p.currule.deferto != pAny && p.currule.deferto < p.currule.requires {
 		return nil, p.lineError("rule specifies a phase lower than its operations require so we cannot satisfy the phase requirement")
 	}

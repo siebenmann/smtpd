@@ -338,7 +338,7 @@ func matchIp(rip string, cidr string) bool {
 func ruleForEachRcpt(r *Rule, c *Context) Result {
 	for _, rcpt := range c.trans.rcptto {
 		c.rcptto = rcpt
-		res := r.expr.Eval(c)
+		res := r.check(c)
 		if res {
 			return res
 		}
@@ -444,16 +444,13 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 			// accepted RCPT TO value to see what happens.
 			res = ruleForEachRcpt(r, c)
 		} else {
-			res = r.expr.Eval(c)
+			res = r.check(c)
 		}
 		if c.rulemiss {
 			//fmt.Printf(" ... rulemiss set, skip\n")
 			continue
 		}
 		if res {
-			for k, v := range r.withprops {
-				c.withprops[k] = v
-			}
 			//fmt.Printf(" matched and: %v\n", ret)
 			if r.result >= aAccept {
 				ret = r.result

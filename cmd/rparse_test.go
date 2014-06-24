@@ -31,6 +31,10 @@ reject dnsbl sbl.spamhaus.org with message "listed in the SBL" \
 		savedir jim note barney
 set-with all with note "I am here"
 
+# oh boy
+set-with ip 127.0.0.1 with note a; all with note b;
+	all with message "c"
+
 # test all options for comma-separated things.
 accept dns good or dns noforward,inconsistent,nodns or dns exists
 accept tls on or tls off
@@ -105,13 +109,16 @@ func setupContext(t *testing.T) *Context {
 		rip:   "192.168.10.3",
 		lip:   "127.0.0.1",
 	}
+	// TODO: should we call the real setup function and then start
+	// stuffing values?
 	c := &Context{trans: st,
-		helocmd:  smtpd.EHLO,
-		heloname: "joebob.ben",
-		from:     "jim@jones.com",
-		rcptto:   "joe@example.com",
-		files:    make(map[string][]string),
-		dnsbl:    make(map[string]*Result),
+		helocmd:   smtpd.EHLO,
+		heloname:  "joebob.ben",
+		from:      "jim@jones.com",
+		rcptto:    "joe@example.com",
+		files:     make(map[string][]string),
+		dnsbl:     make(map[string]*Result),
+		withprops: make(map[string]string),
 	}
 
 	var rt, rf Result
@@ -170,12 +177,12 @@ func TestSuccess(t *testing.T) {
 	}
 	for i := range rules {
 		c.rulemiss = false
-		res := rules[i].expr.Eval(c)
+		res := rules[i].check(c)
 		if !res {
-			t.Errorf("rule did not succeed: %v\n", rules[i].expr)
+			t.Errorf("rule did not succeed: %v\n", rules[i])
 		}
 		if c.rulemiss {
-			t.Errorf("rule set rulemiss: %v\n", rules[i].expr)
+			t.Errorf("rule set rulemiss: %v\n", rules[i])
 		}
 	}
 }
@@ -199,13 +206,13 @@ func TestFileAddrMatching(t *testing.T) {
 	}
 	for _, in := range inAddrs {
 		c.from = in
-		if !rules[0].expr.Eval(c) {
+		if !rules[0].check(c) {
 			t.Errorf("address list does not match %s", in)
 		}
 	}
 	for _, out := range outAddrs {
 		c.from = out
-		if rules[0].expr.Eval(c) {
+		if rules[0].check(c) {
 			t.Errorf("address list matches %s", out)
 		}
 	}
@@ -219,7 +226,7 @@ func TestEmptyFile(t *testing.T) {
 	if e != nil {
 		t.Fatalf("parse error %v", e)
 	}
-	rules[0].expr.Eval(c)
+	rules[0].check(c)
 	if !c.rulemiss {
 		t.Fatalf("rule did not set rulemiss")
 	}
@@ -256,7 +263,7 @@ func TestHeloHas(t *testing.T) {
 			t.Errorf("error parsing: %s\n\t%v\n", s.match, err)
 			continue
 		}
-		if !rules[0].expr.Eval(c) {
+		if !rules[0].check(c) {
 			t.Errorf("HELO '%s' does not match: %s\n", s.helo,
 				s.match)
 		}
@@ -271,7 +278,7 @@ func TestHeloHas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error parsing HELO recognition test: %s", err)
 	}
-	if !rules[0].expr.Eval(c) {
+	if !rules[0].check(c) {
 		t.Errorf("helo-has did not see this as a 'HELO' helo vs EHLO\n")
 	}
 }
@@ -309,6 +316,9 @@ accept with message fred
 accept all with note "embedded newline
 	is here"
 set-with all
+set-with all with note a;
+set-with all with ;
+set-with all with note a; all
 @from accept to @fbi.gov`
 
 func TestNotParse(t *testing.T) {
@@ -325,7 +335,7 @@ func TestNotParse(t *testing.T) {
 func TestDnsblHit(t *testing.T) {
 	c := setupContext(t)
 	rules, _ := Parse("accept dnsbl nosuch.domain")
-	if !rules[0].expr.Eval(c) {
+	if !rules[0].check(c) {
 		t.Fatalf("did not hit in nosuch.domain")
 	}
 	if len(c.dnsblhit) != 1 && c.dnsblhit[0] != "nosuch.domain" {
@@ -333,10 +343,38 @@ func TestDnsblHit(t *testing.T) {
 	}
 	c.dnsblhit = []string{}
 	rules, _ = Parse("accept dnsbl notthere.domi")
-	if rules[0].expr.Eval(c) {
+	if rules[0].check(c) {
 		t.Fatalf("did hit for notthere.domi")
 	}
 	if len(c.dnsblhit) != 0 {
 		t.Fatalf("c.dnsblhit is not empty after notthere.domi test:\n\t%v\n", c.dnsblhit)
+	}
+}
+
+// Test 'with' option setting, both for set-with and for the actual matching
+// rule (which should override a set-with value).
+var aWiths = `set-with all with message fred note joe
+accept all with savedir bob note jim
+`
+var resVals = []struct{ k, v string }{
+	{"message", "fred"}, {"savedir", "bob"}, {"note", "jim"},
+}
+
+func TestWithSetting(t *testing.T) {
+	c := setupContext(t)
+	rules, err := Parse(aWiths)
+	if err != nil {
+		t.Fatalf("error parsing:\n%s\nerror: %v", aWiths, err)
+	}
+	for _, r := range rules {
+		res := r.check(c)
+		if !res {
+			t.Fatalf("rule %s did not match", r)
+		}
+	}
+	for _, e := range resVals {
+		if c.withprops[e.k] != e.v {
+			t.Errorf("with property difference: for %s expected %s got '%s'", e.k, e.v, c.withprops[e.k])
+		}
 	}
 }

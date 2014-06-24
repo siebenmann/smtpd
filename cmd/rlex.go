@@ -65,6 +65,7 @@ const (
 	itemComma
 	itemLparen
 	itemRparen
+	itemSemicolon
 
 	// general values
 	itemValue
@@ -228,11 +229,12 @@ var specials = map[int]itemType{
 	',':  itemComma,
 	'(':  itemLparen,
 	')':  itemRparen,
+	';':  itemSemicolon,
 	'\n': itemEOL,
 	eof:  itemEOF,
 }
 
-const specialChars = "(),\n \t" // actual characters from above and whitespace
+const specialChars = "(),;\n \t" // actual characters from above and whitespace
 
 type stateFn func(*lexer) stateFn
 

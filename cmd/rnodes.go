@@ -95,10 +95,16 @@ const (
 // is either true or false; in the future it may also include 'Defer'.
 type Result bool
 
+// RClause represents a single rule clause and its with options
+type RClause struct {
+	expr  Expr
+	withs map[string]string
+}
+
 // Rule represents a single rule, bundling together various information
 // about what it needs and results in with the expression it evaluates.
 type Rule struct {
-	expr     Expr // expression to evaluate
+	clauses  []*RClause
 	result   Action
 	requires Phase // Rule requires data from this phase; at most pRto now
 	deferto  Phase // Rule wants to be deferred to this phase
@@ -107,38 +113,71 @@ type Rule struct {
 	// larger than requires. We don't allow '@from accept to ...'
 	// or similar gimmicks; it's explicitly an error in the
 	// parser.
-
-	// 'with' properties associated with this rule
-	withprops map[string]string
 }
 
-func newRule() *Rule {
-	r := &Rule{withprops: make(map[string]string)}
+func newRClause() *RClause {
+	r := &RClause{withs: make(map[string]string)}
 	return r
+}
+
+// check() checks a rule to see if it matches. If it does, the context
+// is updated appropriately. We check each clause in turn; if one
+// matches, we update c.withprops and return true.
+func (r *Rule) check(c *Context) Result {
+	c.rulemiss = false
+	for i := range r.clauses {
+		res := r.clauses[i].expr.Eval(c)
+		if c.rulemiss {
+			// the results on a rulemiss don't matter, since
+			// we're skipping this rule anyways.
+			return false
+		}
+		if !res {
+			continue
+		}
+		for k, v := range r.clauses[i].withs {
+			c.withprops[k] = v
+		}
+		return res
+	}
+	return false
+}
+
+func (r *Rule) addclause(rc *RClause) {
+	r.clauses = append(r.clauses, rc)
+}
+
+// String() returns the string version of a rule clause.
+// BUG: we don't properly quote strings that need it (ie that contain
+// an embedded ").
+func (rc *RClause) String() string {
+	var with string
+	var keys []string
+	for k := range rc.withs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		with += fmt.Sprintf(" %s \"%s\"", k, rc.withs[k])
+	}
+	if with != "" {
+		with = " with" + with
+	}
+	return fmt.Sprintf("%s%s", rc.expr.String(), with)
 }
 
 // String() returns the string form of a Rule. This is theoretically
 // a parseable version of the canonical form of the rule.
 //
-// BUG: we don't properly quote strings that need it (ie that contain
-// an embedded ").
 func (r *Rule) String() string {
-	var with string
-	var keys []string
-	for k := range r.withprops {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		with += fmt.Sprintf(" %s \"%s\"", k, r.withprops[k])
-	}
-	if with != "" {
-		with = " with" + with
+	var cstrs []string
+	for _, rc := range r.clauses {
+		cstrs = append(cstrs, rc.String())
 	}
 	if r.deferto != pAny {
-		return fmt.Sprintf("%v %v %s%s", r.deferto, r.result, r.expr.String(), with)
+		return fmt.Sprintf("%v %v %s", r.deferto, r.result, strings.Join(cstrs, "; "))
 	} else {
-		return fmt.Sprintf("%v %s%s", r.result, r.expr.String(), with)
+		return fmt.Sprintf("%v %s", r.result, strings.Join(cstrs, "; "))
 	}
 }
 

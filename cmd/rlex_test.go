@@ -67,6 +67,7 @@ var (
 	tLB    = item{itemLparen, "(", 0}
 	tRB    = item{itemRparen, ")", 0}
 	tEOL   = item{itemEOL, "\n", 0}
+	tSemic = item{itemSemicolon, ";", 0}
 )
 
 func itm(s string) item {
@@ -122,6 +123,8 @@ var lexTests = []lexTest{
 		item{itemError, "unterminated quoted value", 0}}},
 	{"quote escaping terminator", "\"fred\\\"", []item{
 		item{itemError, "unterminated quoted value", 0}}},
+
+	{"thing;", "thing;", []item{itv("thing"), tSemic, tEOF}},
 }
 
 func collect(input string) (items []item) {

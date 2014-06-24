@@ -161,9 +161,9 @@ no hash collisions in SHA1 and the sender doesn't send two copies over
 the same connection in the same second; this is impossible if you use
 -S).
 
-Control rules
+CONTROL RULES
 
-In addition to its many command line options for controlling what gets
+In addition to its command line options for controlling what gets
 accepted and rejected when, sinksmtp also lets you give it files of
 rules. Rules let you describe things like:
 
@@ -175,7 +175,7 @@ This rejects a RCPT TO of 'joe@example.com' if the MAIL FROM was
 Rule files and everything they refer to are loaded and parsed at each
 new connection. See later for what happens if there is an error.
 
-The general form of a rule is:
+The simple general form of a rule is:
 	[PHASE] ACTION MATCH-OP [MATCH-OP....] ['with' WITH-OPTS]
 
 The action is one of 'accept', 'reject', 'stall' (which emits SMTP 4xx
@@ -188,6 +188,20 @@ and take effect in that phase of the SMTP transaction and is one of:
 @data is when the DATA command is received but before the sender has
 been authorized to send the message; @message is after the message has
 been received.
+
+There is also a compact form for checking multiple rule clauses (with
+optional with clauses) at once. This separates rule clauses and their
+with's with ';' (possibly with a newline immediately after it). For
+example:
+
+	set-with helo somehost with message "That's nice";
+		 from a@b with message "from a@b" ;
+		 from @b with message "from @b"
+
+Such a compact form must end with a rule without a ';' at the end.  In
+compact form, each rule clause is checked in order and the first
+matching one stops further checking, even (or especially) in set-with
+clauses. Compact form rules are probably most useful with set-with.
 
 Most match operations take an argument, as seen.  Match operators can
 be negated with 'not':
@@ -226,6 +240,17 @@ quote can be escaped with a backslash. Eg:
 	reject helo "very \" bogus"
 
 Quoted strings can continue over multiple lines. No '\ ' is needed.
+A quoted string cannot be used as a match operator, even if you are
+just putting quotes around a match operator, eg the following is
+an error:
+
+	reject "helo" .local
+
+
+It is an error to specify a 'set-with' rule that has no 'with ...'
+options. Since such a rule is pointless it's assumed to be a mistake.
+
+The order of rule checking
 
 Eligible rules are checked in order and the first non 'set-with' rule
 that matches determines the results. A matching 'set-with' rule
@@ -242,11 +267,18 @@ controls what that option is set to. For example:
 
 This will set the SMTP success, failure, or stall message to 'You are
 here' even for a MAIL FROM with a domain of a.b, because the 'all'
-rule comes after the from-restricted rule. Yes, this is probably
-confusing.
+rule comes after the from-restricted rule. If this is not what you
+want, use set-with in compact form:
 
-It is an error to specify a 'set-with' rule that has no 'with ...'
-options. Since such a rule is pointless it's assumed to be a mistake.
+	set-with from @a.b with message "Hi there";
+		 all with message "You are here".
+
+Since this stops checking at the first match, for a MAIL FROM with a
+domain of a.b the message will be "Hi there". Note that this rule
+cannot be checked before MAIL FROM time because it checks 'from'.
+This may be a bug. Compact-form set-withs are probably best used to
+set savedir in an easy to follow way in the face of multiple
+conditions that may overlap.
 
 When rules are checked
 
