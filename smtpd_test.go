@@ -337,7 +337,7 @@ func TestSequence(t *testing.T) {
 			t.Fatalf("Sequence mismatch at step %d: expected %v %v got %v %v\n",
 				pos, ts.what, ts.cmd, evt.What, evt.Cmd)
 		}
-		pos += 1
+		pos++
 		if evt.What == DONE {
 			break
 		}
