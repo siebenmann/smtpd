@@ -174,6 +174,8 @@ This rejects a RCPT TO of 'joe@example.com' if the MAIL FROM was
 
 Rule files and everything they refer to are loaded and parsed at each
 new connection. See later for what happens if there is an error.
+Rules files can include other rules files with an include directive:
+	include additional-rules
 
 The simple general form of a rule is:
 	[PHASE] ACTION MATCH-OP [MATCH-OP....] ['with' WITH-OPTS]

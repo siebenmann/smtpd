@@ -42,6 +42,8 @@ accept from-has unqualified,route,quoted,noat,garbage,bad
 accept to-has unqualified,route,quoted,noat,garbage,bad
 accept helo-has helo,ehlo,none,nodots,bareip,properip,ip,myip,remip,otherip
 
+# we assume /dev/null is always present, because we're Unix-biased like that.
+include /dev/null
 `
 
 func TestParse(t *testing.T) {

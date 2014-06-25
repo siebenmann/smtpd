@@ -43,12 +43,18 @@ func warnonce(format string, elems ...interface{}) {
 	s := fmt.Sprintf(format, elems...)
 	uniquer <- s
 }
+
+// TODO: work out a way to clear this so that a sequence of
+// parse error -> everything is clear -> same parse error again
+// results in the error being printed again.
 func warnbackend() {
 	var lastmsg string
 	for {
 		nmsg := <-uniquer
 		if nmsg != lastmsg {
-			fmt.Fprintf(os.Stderr, "sinksmtp: %s", nmsg)
+			if nmsg != "" {
+				fmt.Fprintf(os.Stderr, "sinksmtp: %s", nmsg)
+			}
 			lastmsg = nmsg
 		}
 	}
@@ -1019,7 +1025,15 @@ func main() {
 	}
 
 	// Turn the rules file string into filenames and verify that they
-	// are all there and readable.
+	// all parse.
+	// first we must build our base rules, in case things explode
+	baserules := buildRules()
+	genStallRules()
+	// start up our 'suppress duplicate warnings' backend
+	// goroutine now, since setupRules() may wind up calling it.
+	go warnbackend()
+
+	// basic check for presence and readability.
 	if rfiles != "" {
 		rulefiles = strings.Split(rfiles, ",")
 		for _, rf := range rulefiles {
@@ -1030,6 +1044,18 @@ func main() {
 			fp.Close()
 		}
 	}
+	// Try to load the rules.
+	_, isgood := setupRules(baserules)
+	if !isgood {
+		// we must call warnonce() to make sure that the warn once
+		// backend has actually printed earlier warning messages.
+		// otherwise our print-and-exit is in a race with the
+		// backend goroutine running, a race that the backend
+		// goroutine can easily lose.
+		warnonce("")
+		die("not continuing when there are problems in the rules files.\n")
+	}
+
 	switch minphase {
 	case "ehlo":
 		// ehlo is a synonym for helo
@@ -1039,9 +1065,6 @@ func main() {
 	default:
 		die("invalid -minphase '%s': must be helo/ehlo, from, to, data, message, or accepted\n", minphase)
 	}
-
-	baserules := buildRules()
-	genStallRules()
 
 	// Set up a pool of listeners, one per address that we're supposed
 	// to be listening on. These are goroutines that multiplex back to
@@ -1054,9 +1077,6 @@ func main() {
 		}
 		go listener(conn, listenc)
 	}
-
-	// start up our 'suppress duplicate warnings' backend goroutine
-	go warnbackend()
 
 	// Loop around getting new connections from our listeners and
 	// handing them off to be processed. We insist on sitting in

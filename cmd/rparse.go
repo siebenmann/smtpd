@@ -4,6 +4,7 @@
 //
 // our grammar (not fully formal):
 // a file is a sequence of rules; each rule ends at end of line
+// or 'include FILENAME EOL'
 //
 // rule    -> [phase] what andl [with] EOL|EOF
 // rclause -> andl [with] [rend rclause]
@@ -570,9 +571,37 @@ func (p *parser) pRule() (r *Rule, err error) {
 	return p.currule, err
 }
 
-// a file is a sequence of rules.
+// parse: 'include FILENAME EOL'
+// we enter with the 'include' as the current token, so we must immediately
+// consume it.
+func (p *parser) pInclude() ([]*Rule, error) {
+	p.consume()
+	fname, err := p.pArg()
+	if err != nil {
+		return nil, err
+	}
+	rules, err := loadRules(fname)
+	if err != nil {
+		return rules, p.lineError(fmt.Sprintf("while including '%s': %s", fname, err))
+	}
+	if !p.isEol() {
+		return rules, p.genError("expecting end of line")
+	}
+	p.consume()
+	return rules, nil
+}
+
+// a file is a sequence of rules and/or include statements.
 func (p *parser) pFile() (rules []*Rule, err error) {
 	for {
+		if p.curtok.typ == itemInclude {
+			rl, e := p.pInclude()
+			if e != nil {
+				return rules, e
+			}
+			rules = append(rules, rl...)
+			continue
+		}
 		r, e := p.pRule()
 		if e != nil {
 			return rules, e

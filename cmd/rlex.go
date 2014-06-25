@@ -78,6 +78,8 @@ const (
 	itemKeywords
 
 	// All of the sorts of keywords:
+	itemInclude
+
 	// phases
 	itemAHelo
 	itemAFrom
@@ -145,6 +147,8 @@ const (
 // issue: we have a lot of item types here. Really, a lot.
 
 var keywords = map[string]itemType{
+	"include": itemInclude,
+
 	// phases
 	"@helo":    itemAHelo,
 	"@from":    itemAFrom,
