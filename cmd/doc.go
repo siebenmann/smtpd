@@ -25,7 +25,9 @@ This attempts to group options together logically.
 
 	-c FILE, -k FILE
 		Provide TLS certificate and private key to enable TLS.
-		Both files must be PEM encoded. Self-signed is fine.
+		Both files must be PEM encoded. Self-signed is fine
+		and in fact you probably should use only self-signed
+		certificates with sinksmtp; see the TLS section.
 		You must give both options together (or neither).
 
 	-l FILE
@@ -135,11 +137,29 @@ depending on DNS lookup results.
 
 TLS
 
+To start with, an important note about TLS in sinksmtp. The Go people
+say that Go's TLS support is has not been through a security audit and
+may have security flaws. If you're using Go in a production situation
+with TLS, they advise that you deal with TLS in a separate frontend
+using a more trusted TLS implementation.  As a result I suggest that
+you only use self-signed certificates with sinksmtp.
+
 Go only supports SSLv3+ and sinksmtp attempts to validate any client
 certificate that clients present to us. Both can cause TLS setup to
-fail (yes, there are apparently some MTAs that only support SSLv2).
-When TLS setup fails we remember the client IP and don't offer TLS to
-it if it reconnects within a certain amount of time (currently 72 hours).
+fail. When TLS setup fails twice we remember the client IP and don't
+offer TLS to it if it reconnects within a certain amount of time
+(currently 72 hours).
+
+Some TLS-capable clients always start out by trying the SSLv2 protocol
+(and then advertising TLS in it). SSLv2 uses a different handshake
+from TLS, which causes Go to completely fail the TLS setup even though
+the client is capable of something that Go can deal with. The symptom
+of this is a SMTP log message of:
+
+	TLS setup failed: tls: unsupported SSLv2 handshake received
+
+Of course this can also happen if the client only supports SSLv2,
+but that's hopefully rare in this day and age.
 
 Save file hash naming
 

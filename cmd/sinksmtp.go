@@ -676,8 +676,16 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	if goslow || stall {
 		convo.AddDelay(time.Second / 10)
 	}
-	blocktls, _ := notls.Lookup(trans.rip, tlsTimeout)
-	if len(certs) > 0 && !blocktls {
+
+	// Don't offer TLS to hosts that have too many TLS failures.
+	// We give hosts *two* tries at setting up TLS because some
+	// hosts start by offering SSLv2, which is an instant-fail,
+	// even if they support stuff that we do. We hope that their
+	// SSLv2 failure will cause them to try again in another
+	// connection with TLS only.
+	// See https://code.google.com/p/go/issues/detail?id=3930
+	blocktls, blcount := notls.Lookup(trans.rip, tlsTimeout)
+	if len(certs) > 0 && !(blocktls && blcount >= 2) {
 		var tlsc tls.Config
 		tlsc.Certificates = certs
 		tlsc.ClientAuth = tls.VerifyClientCertIfGiven
