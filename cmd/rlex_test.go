@@ -83,12 +83,12 @@ var lexTests = []lexTest{
 	{"blank lines", "\n\n\n\n# a comment\n   # more comment\n# run out",
 		[]item{tEOF}},
 	{"non-keywords", "fred@barney /a/file", []item{
-		item{itemValue, "fred@barney", 0},
-		item{itemFilename, "/a/file", 0}, tEOF}},
+		{itemValue, "fred@barney", 0},
+		{itemFilename, "/a/file", 0}, tEOF}},
 	{"file:something", "file:something", []item{
-		item{itemFilename, "file:something", 0}, tEOF}},
+		{itemFilename, "file:something", 0}, tEOF}},
 	{"file: error", "file:", []item{
-		item{itemError, "'file:' with no filename", 0}}},
+		{itemError, "'file:' with no filename", 0}}},
 	{"random \\", "\\aback", []item{itv("\\aback"), tEOF}},
 	// random string of items.
 	{"tls", "tls on tls off\n", []item{itm("tls"), itm("on"),
@@ -96,7 +96,7 @@ var lexTests = []lexTest{
 	{"comma ops", "dns nodns,noforward,ehlo", []item{
 		itm("dns"), itm("nodns"), tComma, itm("noforward"), tComma,
 		itm("ehlo"), tEOF}},
-	{"comma bad", ", nodns", []item{tComma, item{itemError, "comma followed by whitespace, EOL, or EOF", 0}}},
+	{"comma bad", ", nodns", []item{tComma, {itemError, "comma followed by whitespace, EOL, or EOF", 0}}},
 	{"embedded comment", "stall from @\n # a comment\nreject to @a",
 		[]item{itm("stall"), itm("from"), itv("@"), tEOL,
 			itm("reject"), itm("to"), itv("@a"), tEOF}},
@@ -120,9 +120,9 @@ var lexTests = []lexTest{
 	{"quote spans lines", "\"fred\njim\n  bob\"", []item{
 		itv("fred\njim\n  bob"), tEOF}},
 	{"unterminated quote", "\"fred jim", []item{
-		item{itemError, "unterminated quoted value", 0}}},
+		{itemError, "unterminated quoted value", 0}}},
 	{"quote escaping terminator", "\"fred\\\"", []item{
-		item{itemError, "unterminated quoted value", 0}}},
+		{itemError, "unterminated quoted value", 0}}},
 
 	{"thing;", "thing;", []item{itv("thing"), tSemic, tEOF}},
 }
@@ -182,7 +182,7 @@ func TestKeywordCover(t *testing.T) {
 // This is a basic invertability test.
 func TestAllKeywords(t *testing.T) {
 	for kw, kiv := range keywords {
-		testitems := []item{item{kiv, kw, 0}, tEOF}
+		testitems := []item{{kiv, kw, 0}, tEOF}
 		items := collect(kw)
 		if !equal(items, testitems) {
 			t.Errorf("inversion: got\n\t%+v\nexpected\n\t%+v", items, testitems)
@@ -197,7 +197,7 @@ func TestAllKeywords(t *testing.T) {
 		if kiv == itemEOF || kiv == itemEOL || kiv == itemComma {
 			continue
 		}
-		testitems := []item{item{kiv, string(kc), 0}, tEOF}
+		testitems := []item{{kiv, string(kc), 0}, tEOF}
 		items := collect(string(kc))
 		if !equal(items, testitems) {
 			t.Errorf("inversion on %v: got\n\t%+v\nexpected\n\t%+v", kc, items, testitems)
