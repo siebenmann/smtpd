@@ -16,6 +16,8 @@ import (
 // we don't try to match them; this is just a parse test (and then
 // a test that we can round-trip them through stringifying the rule
 // and re-parsing it and the round trip is stable).
+// These rules are parsed as a unit so comments, line continuations,
+// etc are both allowed and tested.
 var aParse = `
 accept from a@b
 @data reject to b@c or to fred or from a@b helo barney
@@ -72,7 +74,7 @@ func TestParse(t *testing.T) {
 // ----
 // For many tests of rules evaluation we need a context.
 
-// Will become the synthetic file '/a/file'
+// aList will become the synthetic file '/a/file'
 var aList = `# This is a comment
 INFO@FBI.GOV
 root@
@@ -83,7 +85,7 @@ postmaster@Example.Org
 # t
 `
 
-// will become the synthetic file '/ips'
+// ipList will become the synthetic file '/ips'
 var ipList = `
 127.0.0.0/8
 # this should not generate an error even thought it would in the
@@ -146,9 +148,12 @@ func setupContext(t *testing.T) *Context {
 // context
 // As a side effect these matches test a number of the getter and
 // matcher functions in rules.go
+// Since all rules will parse, allSuccess is parsed as an entire file
+// instead of line at a time.
 var allSuccess = `
 accept all
 accept from jim@jones.com to joe@example.com not dns nodns
+accept from JIM@JONES.com
 accept to joe@ from @.com
 accept dns inconsistent dns noforward
 accept helo-has ehlo tls on
@@ -190,6 +195,7 @@ func TestSuccess(t *testing.T) {
 }
 
 // verify address matching for a file-based from rule.
+// we include tests for properly lower-casing an address.
 var inAddrs = []string{
 	"INFO@FBI.GOV", "root@fred.com", "random@example.com",
 	"postmaster@example.org", "root@example.com",
@@ -285,7 +291,11 @@ func TestHeloHas(t *testing.T) {
 	}
 }
 
+// Test specific parse failures.
 // none of these lines should parse
+// note that these are split on \n and each line is then parsed
+// separately (because the parser normally stops on the first error),
+// so you can't do line-continuation tests here.
 var notParse = `helo
 accept dns fred,barney
 accept dns nodns, good

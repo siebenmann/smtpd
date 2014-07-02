@@ -1,4 +1,7 @@
 //
+// Basic testing for file loading, which is stuck in sinksmtp.go for
+// reasons that are partly historical.
+
 package main
 
 import (
@@ -13,6 +16,8 @@ func isPresent(a []string, p string) bool {
 	return i < len(a) && a[i] == p
 }
 
+// Test readList() by loading a basic list and seeing if the entries we
+// expect are present and have been properly lower-cased.
 func TestLoader(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(basiclist))
 	a, err := readList(reader)
@@ -45,4 +50,5 @@ postmaster@Example.Org
 
 var present = []string{
 	"info@fbi.gov", "root@", "@example.com", "postmaster@example.org",
+	"@.barney.net",
 }
