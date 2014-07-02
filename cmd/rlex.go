@@ -463,15 +463,16 @@ func lexQuote(l *lexer) stateFn {
 			return lexLineRunning
 		}
 
-		// possible quoted string. Check. If not, skip it.
-		if !strings.HasPrefix(l.input[apos:], "\\\"") {
+		// possible quoted string or quoted escape. Check.
+		// If not, skip it.
+		if !(strings.HasPrefix(l.input[apos:], "\\\"") || strings.HasPrefix(l.input[apos:], "\\\\")) {
 			lookat = apos + 1
 			continue
 		}
 
-		// real \" sequence; eat it
+		// real \" or \\ sequence; eat it
 		qparts = append(qparts, l.input[l.pos:apos])
-		qparts = append(qparts, "\"")
+		qparts = append(qparts, l.input[apos+1:apos+2])
 		l.pos = apos + 2
 		lookat = l.pos
 	}

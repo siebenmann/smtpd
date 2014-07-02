@@ -11,7 +11,8 @@ import (
 )
 
 // Test that we can lex all of the constructs we expect without an
-// error.
+// error. Because this tests only the lexer it is remarkably relaxed,
+// since the lexer converts random text into itemValues.
 // Run 'go test -v' to see a dump of the lex stream for this block
 // of things; it will also be printed if we got an error during
 // lexing.
@@ -55,10 +56,12 @@ func TestLexing(t *testing.T) {
 	}
 }
 
+//
+// Specific lexing results tests
 type lexTest struct {
-	name  string
-	input string
-	items []item
+	name  string // description of the test
+	input string // parse input
+	items []item // expected output tokens
 }
 
 var (
@@ -70,14 +73,16 @@ var (
 	tSemic = item{itemSemicolon, ";", 0}
 )
 
+// itm makes a keyword item
 func itm(s string) item {
 	return item{keywords[s], s, 0}
 }
+
+// itv makes an itemValue
 func itv(s string) item {
 	return item{itemValue, s, 0}
 }
 
-// These are not exhaustive by any means.
 var lexTests = []lexTest{
 	{"empty", "    ", []item{tEOF}},
 	{"blank lines", "\n\n\n\n# a comment\n   # more comment\n# run out",
@@ -114,6 +119,8 @@ var lexTests = []lexTest{
 		itv("fred jim"), itm("from"), tEOF}},
 	{"proper quote with escape", "\"fred\\\"bob\"", []item{
 		itv("fred\"bob"), tEOF}},
+	{"quote with escaped backslash", "\"fred\\\\bob\"", []item{
+		itv("fred\\bob"), tEOF}},
 	{"quote with non-escaping backslash", "\"fred\\bob\"", []item{
 		itv("fred\\bob"), tEOF}},
 	{"quote defeats comma", "\", \"", []item{itv(", "), tEOF}},
@@ -127,6 +134,8 @@ var lexTests = []lexTest{
 	{"thing;", "thing;", []item{itv("thing"), tSemic, tEOF}},
 }
 
+// collect() collects the tokens resulting from lexing a string,
+// up to an EOF or Error.
 func collect(input string) (items []item) {
 	l := lex(input)
 	for {
@@ -138,6 +147,7 @@ func collect(input string) (items []item) {
 	}
 	return
 }
+
 func equal(i1, i2 []item) bool {
 	if len(i1) != len(i2) {
 		return false
@@ -159,10 +169,16 @@ func TestLex(t *testing.T) {
 	}
 }
 
-// This is a test that's designed to keep me from making stupid mistakes
-// of adding keyword items without adding map entries for them, or adding
-// two keyword strings that map to the same itemType.
-// It caught one error so VERY USEFUL.
+// Test keyword coverage in two ways. First, iterate through the item*
+// values of all keywords to make sure that they are unique, ie I
+// don't have two keyword strings that map to one item* value. If I
+// create a synonym, I want it to be deliberate and have an exception
+// in this test. Second, iterate through all item* values that are
+// known to be keywords and verify that they have a keyword in the
+// keywords mapping.
+//
+// This is a test that's designed to keep me from making stupid mistakes.
+// It caught an error so I'm scoring it as useful.
 func TestKeywordCover(t *testing.T) {
 	m := make(map[itemType]string)
 	for k, v := range keywords {
@@ -179,7 +195,12 @@ func TestKeywordCover(t *testing.T) {
 	}
 }
 
-// This is a basic invertability test.
+// Test that all keywords and all testable specials lex to themselves.
+// EOF can't be tested because it's entirely synthetic.
+// EOL can't be tested by itself because the lexer eats fully blank
+// lines, so "\n" is just EOF instead of EOL EOF.
+// ',' can't be tested because the lexer specifically errors out on
+// a comma followed by EOF or EOL.
 func TestAllKeywords(t *testing.T) {
 	for kw, kiv := range keywords {
 		testitems := []item{{kiv, kw, 0}, tEOF}

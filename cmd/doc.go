@@ -257,9 +257,10 @@ The rule file can have blank lines and comment lines, which start with
 	@data reject all
 
 Rules allow quoted strings, ".. .. ...". Within a quoted string, a
-quote can be escaped with a backslash. Eg:
+quote can be escaped with a backslash (and a backslash can be escaped
+with itself). Eg:
 
-	reject helo "very \" bogus"
+	reject helo "very \"\\ bogus"
 
 Quoted strings can continue over multiple lines. No '\ ' is needed.
 A quoted string cannot be used as a match operator, even if you are
