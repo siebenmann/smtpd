@@ -58,6 +58,11 @@ This attempts to group options together logically.
 		message details may be logged and messages may be saved
 		if -l and/or -d is set.
 
+	-nostdrules
+		Do not include standard basic rules that reject
+		HELO/EHLO without a name and certain sorts of bad
+		addresses.
+
 	-r FILE[,FILE2,...]
 		Use FILE et al as control rules files. Rules in
 		earlier files take priority over rules in later
@@ -625,7 +630,8 @@ Sinksmtp actually translates all of its what-to-accept options into
 rules. These rules are then checked before your rules file, giving
 them priority over your rules. Right now, how things translate is:
 
-	# standard rules that are always present
+	# standard rules that are always present unless you use
+	# -nostdrules
 	reject from-has bad,route
 	reject to-has bad,route
 	reject helo-has none

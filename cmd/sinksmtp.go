@@ -849,15 +849,19 @@ func openlogfile(fname string) (outf io.Writer, err error) {
 }
 
 // Build the baseline rules that reflect the options.
-func buildRules() []*Rule {
+func buildRules(stdrules bool) []*Rule {
 	var outbuf bytes.Buffer
-	// We must split these rules because otherwise the to-has
-	// requirement would defer this rule until RCPT TO even if
-	// the MAIL FROM was bad.
-	fmt.Fprintf(&outbuf, "reject from-has bad,route\n")
-	fmt.Fprintf(&outbuf, "reject to-has bad,route\n")
-	// We never accept blank EHLO/HELO, although smtpd will.
-	fmt.Fprintf(&outbuf, "reject helo-has none\n")
+
+	if stdrules {
+		// We must split these rules because otherwise the
+		// to-has requirement would defer this rule until RCPT
+		// TO even if the MAIL FROM was bad.
+		fmt.Fprintf(&outbuf, "reject from-has bad,route\n")
+		fmt.Fprintf(&outbuf, "reject to-has bad,route\n")
+		// We never accept blank EHLO/HELO, although smtpd
+		// will.
+		fmt.Fprintf(&outbuf, "reject helo-has none\n")
+	}
 
 	if failgotdata {
 		fmt.Fprintf(&outbuf, "@message reject all\n")
@@ -947,7 +951,7 @@ in this process cause the connection to defer all commands with a
 func main() {
 	var smtplogfile, logfile, rfiles string
 	var certfile, keyfile string
-	var force bool
+	var force, nostdrules bool
 	var certs []tls.Certificate
 
 	// TODO: group these better. Handle these better? Something.
@@ -968,6 +972,7 @@ func main() {
 	flag.IntVar(&yakCount, "dncount", 0, "stall & don't log do-nothing clients after this many connections")
 	flag.DurationVar(&yakTimeout, "dndur", time.Hour*8, "default do-nothing client timeout period and time window")
 	flag.StringVar(&minphase, "minphase", "helo", "minimum successful phase to not be a do-nothing client")
+	flag.BoolVar(&nostdrules, "nostdrules", false, "do not use standard basic rules")
 
 	flag.Usage = usage
 
@@ -1035,7 +1040,7 @@ func main() {
 	// Turn the rules file string into filenames and verify that they
 	// all parse.
 	// first we must build our base rules, in case things explode
-	baserules := buildRules()
+	baserules := buildRules(!nostdrules)
 	genStallRules()
 	// start up our 'suppress duplicate warnings' backend
 	// goroutine now, since setupRules() may wind up calling it.
