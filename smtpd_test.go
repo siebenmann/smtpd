@@ -186,7 +186,7 @@ func runSmtpTest(serverStr, clientStr string) (string, string) {
 
 	// Server(reader, writer)
 	var evt EventInfo
-	conn := NewConn(cxn, "localhost", nil)
+	conn := NewConn(cxn, Config{}, nil)
 	for {
 		evt = conn.Next()
 		if evt.What == DONE || evt.What == ABORT {
@@ -328,7 +328,7 @@ func TestSequence(t *testing.T) {
 
 	// Server(reader, writer)
 	var evt EventInfo
-	conn := NewConn(cxn, "localhost", nil)
+	conn := NewConn(cxn, Config{}, nil)
 	pos := 0
 	for {
 		evt = conn.Next()

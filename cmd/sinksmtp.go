@@ -605,6 +605,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	var logger *smtpLogger
 	var l2 io.Writer
 	var gotsomewhere, stall, sesscounts bool
+	var cfg smtpd.Config
 
 	defer nc.Close()
 
@@ -669,12 +670,15 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 			}
 		}
 	}
-	convo = smtpd.NewConn(nc, sname, l2)
-	convo.SayTime = true
+	cfg.LocalName = sname
+	cfg.SayTime = true
+	cfg.SftName = "sinksmtp 0.1"
+	cfg.Announce = "This server does not deliver email."
+
 	// stalled conversations are always slow, even if -S is not set.
 	// TODO: make them even slower than this? I probably don't care.
 	if goslow || stall {
-		convo.AddDelay(time.Second / 10)
+		cfg.Delay = time.Second / 10
 	}
 
 	// Don't offer TLS to hosts that have too many TLS failures.
@@ -691,8 +695,11 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 		tlsc.ClientAuth = tls.VerifyClientCertIfGiven
 		tlsc.SessionTicketsDisabled = true
 		tlsc.ServerName = sname
-		convo.AddTLS(&tlsc)
+		cfg.TLSConfig = &tlsc
 	}
+
+	// With everything set up we can now create the connection.
+	convo = smtpd.NewConn(nc, cfg, l2)
 
 	// Yes, we do rDNS lookup before our initial greeting banner and
 	// thus can pause a bit here. Clients will cope, or at least we

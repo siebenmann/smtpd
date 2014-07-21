@@ -320,9 +320,20 @@ var DefaultLimits = Limits{
 	NoParams: true,
 }
 
+// Config represents the configuration for a Conn. If unset, Limits is
+// DefaultLimits, LocalName is 'localhost', and SftName is 'go-smtpd'.
+type Config struct {
+	TLSConfig *tls.Config   // TLS configuration if TLS is to be enabled
+	Limits    *Limits       // The limits applied to the connection
+	Delay     time.Duration // Delay every character in replies by this much.
+	SayTime   bool          // report the time and date in the server banner
+	LocalName string        // The local hostname to use in messages
+	SftName   string        // The software name to use in messages
+	Announce  string        // extra stuff to announce in greeting banner
+}
+
 // Conn represents an ongoing SMTP connection. The TLS fields are
-// read-only; the SayTime field may be written to (and defaults to
-// false).
+// read-only.
 //
 // Note that this structure cannot be created by hand. Call NewConn.
 //
@@ -337,22 +348,18 @@ type Conn struct {
 	rdr    *textproto.Reader // wraps lr
 	logger io.Writer
 
+	cfg Config
+
 	state   conState
 	badcmds int // count of bad commands so far
-	limits  Limits
-	delay   time.Duration // see SetDelay()
 
 	// used for state tracking for Accept()/Reject()/Tempfail().
 	curcmd  Command
 	replied bool
 	nstate  conState // next state if command is accepted.
 
-	tlsc      *tls.Config
 	TLSOn     bool   // TLS is on in this connection
 	TLSCipher uint16 // Negociated TLS cipher. See net/tls.
-
-	SayTime bool   // put the time and date in the server banner
-	local   string // Local hostname for server banner
 }
 
 // An Event is the sort of event that is returned by Conn.Next().
@@ -394,7 +401,7 @@ func (c *Conn) slowWrite(b []byte) (n int, err error) {
 		if err != nil {
 			break
 		}
-		time.Sleep(c.delay)
+		time.Sleep(c.cfg.Delay)
 	}
 	return cnt, err
 }
@@ -407,9 +414,9 @@ func (c *Conn) reply(format string, elems ...interface{}) {
 	// we can ignore the length returned, because Write()'s contract
 	// is that it returns a non-nil err if n < len(b).
 	// We are cautious about our write deadline.
-	wd := c.delay * time.Duration(len(b))
-	c.conn.SetWriteDeadline(time.Now().Add(c.limits.ReplyOut + wd))
-	if c.delay > 0 {
+	wd := c.cfg.Delay * time.Duration(len(b))
+	c.conn.SetWriteDeadline(time.Now().Add(c.cfg.Limits.ReplyOut + wd))
+	if c.cfg.Delay > 0 {
 		_, err = c.slowWrite(b)
 	} else {
 		_, err = c.conn.Write(b)
@@ -446,7 +453,7 @@ func (c *Conn) readCmd() string {
 	// This is much bigger than the RFC requires.
 	c.lr.N = 2048
 	// Allow two minutes per command.
-	c.conn.SetReadDeadline(time.Now().Add(c.limits.CmdInput))
+	c.conn.SetReadDeadline(time.Now().Add(c.cfg.Limits.CmdInput))
 	line, err := c.rdr.ReadLine()
 	// abort not just on errors but if the line length is exhausted.
 	if err != nil || c.lr.N == 0 {
@@ -461,14 +468,14 @@ func (c *Conn) readCmd() string {
 }
 
 func (c *Conn) readData() string {
-	c.conn.SetReadDeadline(time.Now().Add(c.limits.MsgInput))
-	c.lr.N = c.limits.MsgSize
+	c.conn.SetReadDeadline(time.Now().Add(c.cfg.Limits.MsgInput))
+	c.lr.N = c.cfg.Limits.MsgSize
 	b, err := c.rdr.ReadDotBytes()
 	if err != nil || c.lr.N == 0 {
 		c.state = sAbort
 		b = nil
 		c.log("!", "DATA abort %s err: %v",
-			fmtBytesLeft(c.limits.MsgSize, c.lr.N), err)
+			fmtBytesLeft(c.cfg.Limits.MsgSize, c.lr.N), err)
 	} else {
 		c.log("r", ". <end of data>")
 	}
@@ -476,26 +483,7 @@ func (c *Conn) readData() string {
 }
 
 func (c *Conn) stopme() bool {
-	return c.state == sAbort || c.badcmds > c.limits.BadCmds || c.state == sQuit
-}
-
-// AddTLS adds support for TLS to the Conn. It should be called before
-// Conn.Next() is called for the first time.
-func (c *Conn) AddTLS(tlsc *tls.Config) {
-	c.TLSOn = false
-	c.tlsc = tlsc
-}
-
-// AddDelay adds a delay to the (server) output of every character in
-// replies.  This annoys some spammers and may cause them to
-// disconnect.
-func (c *Conn) AddDelay(delay time.Duration) {
-	c.delay = delay
-}
-
-// SetLimits sets non-default limits and options on a Conn.
-func (c *Conn) SetLimits(limits Limits) {
-	c.limits = limits
+	return c.state == sAbort || c.badcmds > c.cfg.Limits.BadCmds || c.state == sQuit
 }
 
 // Accept accepts the current SMTP command, ie gives an appropriate
@@ -508,16 +496,16 @@ func (c *Conn) Accept() {
 	c.state = c.nstate
 	switch c.curcmd {
 	case HELO:
-		c.reply("250 %s Hello %v", c.local, c.conn.RemoteAddr())
+		c.reply("250 %s Hello %v", c.cfg.LocalName, c.conn.RemoteAddr())
 	case EHLO:
-		c.reply("250-%s Hello %v", c.local, c.conn.RemoteAddr())
+		c.reply("250-%s Hello %v", c.cfg.LocalName, c.conn.RemoteAddr())
 		// We advertise 8BITMIME per
 		// http://cr.yp.to/smtp/8bitmime.html
 		c.reply("250-8BITMIME")
 		c.reply("250-PIPELINING")
 		// STARTTLS RFC says: MUST NOT advertise STARTTLS
 		// after TLS is on.
-		if c.tlsc != nil && !c.TLSOn {
+		if c.cfg.TLSConfig != nil && !c.TLSOn {
 			c.reply("250-STARTTLS")
 		}
 		// We do not advertise SIZE because our size limits
@@ -692,15 +680,21 @@ func (c *Conn) Next() EventInfo {
 		c.Accept()
 	}
 	if c.state == sStartup {
+		var announce string
 		c.state = sInitial
 		// log preceeds the banner in case the banner hits an error.
 		c.log("#", "remote %v at %s", c.conn.RemoteAddr(),
 			time.Now().Format(TimeFmt))
-		if c.SayTime {
-			c.reply("220 %s go-smtpd %s", c.local,
-				time.Now().Format(time.RFC1123Z))
+		if c.cfg.Announce != "" {
+			announce = "\n" + c.cfg.Announce
+		}
+		if c.cfg.SayTime {
+			c.replyMulti(220, "%s %s %s%s",
+				c.cfg.LocalName, c.cfg.SftName,
+				time.Now().Format(time.RFC1123Z), announce)
 		} else {
-			c.reply("220 %s go-smtpd", c.local)
+			c.replyMulti(220, "%s %s%s", c.cfg.LocalName,
+				c.cfg.SftName, announce)
 		}
 	}
 
@@ -778,7 +772,7 @@ func (c *Conn) Next() EventInfo {
 			case HELP:
 				c.reply("214 No help here")
 			case STARTTLS:
-				if c.tlsc == nil || c.TLSOn {
+				if c.cfg.TLSConfig == nil || c.TLSOn {
 					c.reply("502 Not supported")
 					continue
 				}
@@ -790,8 +784,8 @@ func (c *Conn) Next() EventInfo {
 				// conn outside of our normal framework, we
 				// must reset both read and write timeouts
 				// to our TLS setup timeout.
-				c.conn.SetDeadline(time.Now().Add(c.limits.TLSSetup))
-				tlsConn := tls.Server(c.conn, c.tlsc)
+				c.conn.SetDeadline(time.Now().Add(c.cfg.Limits.TLSSetup))
+				tlsConn := tls.Server(c.conn, c.cfg.TLSConfig)
 				err := tlsConn.Handshake()
 				if err != nil {
 					c.log("!", "TLS setup failed: %v", err)
@@ -836,7 +830,7 @@ func (c *Conn) Next() EventInfo {
 		// now is all of them. We reject with the RFC-correct
 		// reply instead of a generic one, so we can't use
 		// c.Reject().
-		if res.Params != "" && c.limits.NoParams && !mimeParam(res) {
+		if res.Params != "" && c.cfg.Limits.NoParams && !mimeParam(res) {
 			c.reply("504 Command parameter not implemented")
 			c.replied = true
 			continue
@@ -856,7 +850,7 @@ func (c *Conn) Next() EventInfo {
 	// see it if they send anything more. It will also go in the
 	// SMTP command log.
 	evt.Arg = ""
-	if c.badcmds > c.limits.BadCmds {
+	if c.badcmds > c.cfg.Limits.BadCmds {
 		c.reply("554 Too many bad commands")
 		c.state = sAbort
 		evt.Arg = "too many bad commands"
@@ -893,9 +887,17 @@ func (c *Conn) setupConn(conn net.Conn) {
 // '#' is tracking information for the start or the end of the
 // connection. Further information is up to whatever is behind 'log'
 // to add.
-func NewConn(conn net.Conn, servername string, log io.Writer) *Conn {
-	c := &Conn{state: sStartup, local: servername, logger: log}
+func NewConn(conn net.Conn, cfg Config, log io.Writer) *Conn {
+	c := &Conn{state: sStartup, cfg: cfg, logger: log}
 	c.setupConn(conn)
-	c.SetLimits(DefaultLimits)
+	if c.cfg.Limits == nil {
+		c.cfg.Limits = &DefaultLimits
+	}
+	if c.cfg.SftName == "" {
+		c.cfg.SftName = "go-smtpd"
+	}
+	if c.cfg.LocalName == "" {
+		c.cfg.LocalName = "localhost"
+	}
 	return c
 }
