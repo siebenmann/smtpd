@@ -14,8 +14,11 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"net/mail"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -958,6 +961,7 @@ in this process cause the connection to defer all commands with a
 func main() {
 	var smtplogfile, logfile, rfiles string
 	var certfile, keyfile string
+	var pprofserv string
 	var force, nostdrules bool
 	var certs []tls.Certificate
 
@@ -980,6 +984,7 @@ func main() {
 	flag.DurationVar(&yakTimeout, "dndur", time.Hour*8, "default do-nothing client timeout period and time window")
 	flag.StringVar(&minphase, "minphase", "helo", "minimum successful phase to not be a do-nothing client")
 	flag.BoolVar(&nostdrules, "nostdrules", false, "do not use standard basic rules")
+	flag.StringVar(&pprofserv, "pprof", "", "host:port for net/http/pprof performance monitoring server")
 
 	flag.Usage = usage
 
@@ -1084,6 +1089,14 @@ func main() {
 		// it's okay
 	default:
 		die("invalid -minphase '%s': must be helo/ehlo, from, to, data, message, or accepted\n", minphase)
+	}
+
+	// Start monitoring HTTP server if we've been asked to do so.
+	if pprofserv != "" {
+		runtime.MemProfileRate = 1
+		go func() {
+			http.ListenAndServe(pprofserv, nil)
+		}()
 	}
 
 	// Set up a pool of listeners, one per address that we're supposed

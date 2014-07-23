@@ -89,6 +89,12 @@ This attempts to group options together logically.
 		even if we then reject it; 'accepted' is a sent message
 		that is accepted.
 
+	-pprof HOST:PORT
+		Enable profile monitoring done by net/http/pprof. See
+		its package documentation for details. Normally you
+		should restrict this to localhost if you enable it.
+		This feature may disappear someday.
+
 Convenience options
 
 There are also some convenience options for common rule needs.
