@@ -672,7 +672,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	}
 	cfg.LocalName = sname
 	cfg.SayTime = true
-	cfg.SftName = "sinksmtp 0.1"
+	cfg.SftName = "sinksmtp"
 	cfg.Announce = "This server does not deliver email."
 
 	// stalled conversations are always slow, even if -S is not set.
