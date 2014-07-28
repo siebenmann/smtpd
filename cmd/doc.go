@@ -500,13 +500,31 @@ AATTRS is one or more of:
 		The address just seems to be garbled garbage. Sinksmtp
 		can't really tell anything more about it.
 
+	resolves
+		The domain (or host) of the address resolves to
+		something that seems deliverable, due to either MX or
+		A records that seem real. An address that has any MX
+		of '.' or 'localhost.' is not considered resolvable
+		(even if it has other good MXes).
+	unknown	The DNS system isn't giving us a definite answer about
+		whether or not the domain is deliverable. Most mailers
+		will 4xx such domains in MAIL FROMs, as they require a
+		definitely resolvable origin domain.
+	baddom  The domain (or host) either definitely doesn't exist,
+		has signalled that it doesn't accept email (eg by having
+		an MX of '.'), or it doesn't have any MX targets with
+		non-crazy IP addresses. This is basically the inverse of
+		'resolves'.
+
 	bad	bad is equivalent to 'noat,quoted,unqualified,garbage',
-		ie everything except 'route'.
+		ie everything except 'route' and 'resolves' et al.
 
 sinksmtp is somewhat casual about determining whether or not an address
 really has these attributes; basically it looks for characters in the
 address or at certain positions in the address instead of formally
-parsing it.
+parsing it. 'resolves', 'baddom', and 'unknown' are not defined for
+garbage addresses, route addresses, unqualified addresses, or (obviously)
+addresses without an '@' ('noat').
 
 DATTRS is one or more of:
 	nodns		remote IP has no verified hostnames

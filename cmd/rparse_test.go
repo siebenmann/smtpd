@@ -40,8 +40,8 @@ set-with ip 127.0.0.1 with note a; all with note b;
 # test all options for comma-separated things.
 accept dns good or dns noforward,inconsistent,nodns or dns exists
 accept tls on or tls off
-accept from-has unqualified,route,quoted,noat,garbage,bad
-accept to-has unqualified,route,quoted,noat,garbage,bad
+accept from-has unqualified,route,quoted,noat,garbage,bad,resolves
+accept to-has unqualified,route,quoted,noat,garbage,bad,baddom,unknown
 accept helo-has helo,ehlo,none,nodots,bareip,properip,ip,myip,remip,otherip
 
 # we assume /dev/null is always present, because we're Unix-biased like that.
@@ -164,6 +164,9 @@ accept not (from jim@ to @logan)
 accept all or to jim@example.com
 accept not from-has noat
 accept not to-has quoted
+# these are both false because of the synthetic test environment
+accept not from-has resolves
+accept from-has baddom
 # dns is not good because there are inconsistent and noforward stuff
 accept not dns good
 accept helo .ben

@@ -1,4 +1,5 @@
 //
+
 package main
 
 // Rule nodes and rule evaluation and so on.
@@ -85,6 +86,9 @@ const (
 	oQuoted
 	oNoat
 	oGarbage
+	oDomainValid
+	oDomainInvalid
+	oDomainTempfail
 
 	// merged bitmaps
 	oBad = oUnqualified | oRoute | oNoat | oGarbage
@@ -444,14 +448,14 @@ func newHeloOpt(o Option) Expr {
 }
 
 func getFromOpts(c *Context) Option {
-	return getAddrOpts(c.from)
+	return getAddrOpts(c.from, c)
 }
 func newFromHasOpt(o Option) Expr {
 	return &OptionN{what: "from-has", opts: o, getter: getFromOpts}
 }
 
 func getToOpts(c *Context) Option {
-	return getAddrOpts(c.rcptto)
+	return getAddrOpts(c.rcptto, c)
 }
 func newToHasOpt(o Option) Expr {
 	return &OptionN{what: "to-has", opts: o, getter: getToOpts}

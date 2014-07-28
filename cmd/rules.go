@@ -54,6 +54,9 @@ type Context struct {
 	// rulemiss.
 	dnsblhit []string
 
+	// Domain lookup results
+	domvalid map[string]*dnsResult
+
 	// we should tempfail for internal reasons, eg tempfail on file
 	// read
 	tempfail bool
@@ -96,10 +99,24 @@ func (c *Context) addDnsblHit(domain string) {
 	c.dnsblhit = append(c.dnsblhit, domain)
 }
 
+func (c *Context) validDomain(domain string) dnsResult {
+	if c.domvalid == nil {
+		// hack for testing.
+		return dnsBad
+	}
+	if c.domvalid[domain] != nil {
+		return *c.domvalid[domain]
+	}
+	t := ValidDomain(domain)
+	c.domvalid[domain] = &t
+	return t
+}
+
 func newContext(trans *smtpTransaction, rules []*Rule) *Context {
 	c := &Context{trans: trans, ruleset: rules}
 	c.files = make(map[string][]string)
 	c.dnsbl = make(map[string]*Result)
+	c.domvalid = make(map[string]*dnsResult)
 	return c
 }
 
@@ -193,7 +210,7 @@ func heloGetter(c *Context) (o Option) {
 
 // Analyze an address for its malfunctions
 // TODO: do this better in a more structured way.
-func getAddrOpts(a string) (o Option) {
+func getAddrOpts(a string, c *Context) (o Option) {
 	if a == "" {
 		return
 	}
@@ -228,9 +245,21 @@ func getAddrOpts(a string) (o Option) {
 		o |= oGarbage
 	}
 
-	idx = strings.IndexByte(a, '"')
-	if idx != -1 && idx != lp {
+	idx3 := strings.IndexByte(a, '"')
+	if idx3 != -1 && idx3 != lp {
 		o |= oQuoted
+	}
+
+	if o&(oNoat|oUnqualified|oGarbage|oRoute) == 0 {
+		valid := c.validDomain(a[idx+1:])
+		switch valid {
+		case dnsGood:
+			o |= oDomainValid
+		case dnsBad:
+			o |= oDomainInvalid
+		case dnsTempfail:
+			o |= oDomainTempfail
+		}
 	}
 	return
 }

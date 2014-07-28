@@ -111,8 +111,9 @@ var aOpts = []struct {
 }
 
 func TestAddrOpts(t *testing.T) {
+	c := setupContext(t)
 	for _, opt := range aOpts {
-		o := getAddrOpts(opt.addr)
+		o := getAddrOpts(opt.addr, c)
 		if o != opt.opt {
 			t.Errorf("address '%s' evaluated to: %v instead of %v\n", opt.addr, o, opt.opt)
 		}

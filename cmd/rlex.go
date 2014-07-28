@@ -134,6 +134,9 @@ const (
 	itemQuoted
 	itemNoat
 	itemGarbage
+	itemDomainValid
+	itemDomainInvalid
+	itemDomainTempfail
 	itemBad
 	itemOn
 	itemOff
@@ -203,6 +206,9 @@ var keywords = map[string]itemType{
 	"quoted":       itemQuoted,
 	"noat":         itemNoat,
 	"garbage":      itemGarbage,
+	"resolves":     itemDomainValid,
+	"baddom":       itemDomainInvalid,
+	"unknown":      itemDomainTempfail,
 	"bad":          itemBad,
 	"on":           itemOn,
 	"off":          itemOff,

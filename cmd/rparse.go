@@ -237,6 +237,8 @@ var dnsMap = map[itemType]Option{
 var addrMap = map[itemType]Option{
 	itemUnqualified: oUnqualified, itemRoute: oRoute, itemQuoted: oQuoted,
 	itemNoat: oNoat, itemGarbage: oGarbage, itemBad: oBad,
+	itemDomainValid: oDomainValid, itemDomainInvalid: oDomainInvalid,
+	itemDomainTempfail: oDomainTempfail,
 }
 
 // map from the starting token to the appropriate option map.
