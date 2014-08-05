@@ -19,9 +19,6 @@
 // than the RFC requires so it shouldn't matter). See DefaultLimits
 // and SetLimits().
 //
-// TODO: set the server software name somehow, for the greeting banner?
-// More control over the greeting banner?
-//
 package smtpd
 
 // See http://en.wikipedia.org/wiki/Extended_SMTP#Extensions
@@ -339,9 +336,7 @@ type Config struct {
 //
 // Conn connections advertise support for PIPELINING, 8BITMIME, and
 // also STARTTLS if a TLS certificate has been added through
-// Conn.AddTLS().
-//
-// TODO: this structure is a mess. Clean it up somehow.
+// the Config passed to NewConn().
 type Conn struct {
 	conn   net.Conn
 	lr     *io.LimitedReader // wraps conn as a reader
