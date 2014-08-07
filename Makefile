@@ -1,4 +1,4 @@
-sinksmtp: cmd/sinksmtp.go cmd/tlsnames.go smtpd.go cmd/rdns.go cmd/rlex.go cmd/rnodes.go cmd/rparse.go cmd/rules.go cmd/mxresolve.go
+sinksmtp: cmd/sinksmtp.go cmd/tlsnames.go smtpd.go cmd/rdns.go cmd/rlex.go cmd/rnodes.go cmd/rparse.go cmd/rules.go cmd/mxresolve.go cmd/conncfg.go
 	cd cmd && go build -o ../sinksmtp
 
 clean:

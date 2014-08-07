@@ -30,6 +30,12 @@ This attempts to group options together logically.
 		certificates with sinksmtp; see the TLS section.
 		You must give both options together (or neither).
 
+	-conncfg FILE
+		This file can be used to specify the -helo and -c/-k
+		settings for new connections based on the local IP
+		address that the connection is to. See CONNECTION
+		PARAMETERS later.
+
 	-l FILE
 		Log one line per fully received message to this file,
 		may be '-' for standard output.
@@ -191,6 +197,38 @@ second.  It will basically always be completely unique (well, assuming
 no hash collisions in SHA1 and the sender doesn't send two copies over
 the same connection in the same second; this is impossible if you use
 -S).
+
+CONNECTION PARAMETERS
+
+In simple setups, fixed command line arguments are good enough for
+connections. However if you have multiple IP addresses on a machine that
+are associated with different hosts, you may need to present different
+greetings and TLS keys in response to different connections. The -conncfg
+argument allows you to specify a control file for this purpose.
+The format of the file is:
+
+	LOCAL	[hostname=HOSTNAME] [cert=CERTFILE key=KEYFILE]
+
+(Lines may also be blank or start with '#' for a comment line.)
+
+LOCAL is either an IP address, an 'IP:PORT' value, a CIDR, or '*' to mean
+'matches everything'. It controls what incoming connections match this
+line. The hostname setting is the -helo setting used for the connection;
+cert= and key= set the files for the TLS certificate and key. Either or
+both are optional and the parameters can be in any order.
+
+Lines are checked in order; the first matching line determines the
+settings for the connection. Thus you would normally stick any '*'
+line at the end of the file.
+
+The command line arguments are used as the fallback if there are no
+matching lines. If there is a matching line and it does not specify TLS
+certificates, this overrides the command line -c/-k settings and this
+particular connection will not advertise TLS.
+
+The -conncfg file is reloaded on every new connection. Errors in the
+file are currently not fatal; they cause things to fall back to the
+command line arguments (if any) and the defaults beyond them.
 
 CONTROL RULES
 

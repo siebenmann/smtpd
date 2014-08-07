@@ -673,6 +673,22 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 			}
 		}
 	}
+
+	if connfile != "" {
+		dm, err := loadConnFile(connfile)
+		if err != nil {
+			warnf("error loading per-connection rules '%s': %s\n", connfile, err)
+		}
+		// dm.find() explicitly works even on nil dm, so we don't
+		// need to guard it.
+		if pd := dm.find(nc); pd != nil {
+			if pd.myname != "" {
+				sname = pd.myname
+			}
+			certs = pd.certs
+		}
+	}
+
 	cfg.LocalName = sname
 	cfg.SayTime = true
 	cfg.SftName = "sinksmtp"
@@ -846,6 +862,7 @@ var srvname string
 var savedir string
 var hashtype string
 var minphase string
+var connfile string
 
 func openlogfile(fname string) (outf io.Writer, err error) {
 	if fname == "" {
@@ -985,6 +1002,7 @@ func main() {
 	flag.StringVar(&minphase, "minphase", "helo", "minimum successful phase to not be a do-nothing client")
 	flag.BoolVar(&nostdrules, "nostdrules", false, "do not use standard basic rules")
 	flag.StringVar(&pprofserv, "pprof", "", "host:port for net/http/pprof performance monitoring server")
+	flag.StringVar(&connfile, "conncfg", "", "filename of per-connection parameters")
 
 	flag.Usage = usage
 
@@ -1047,6 +1065,13 @@ func main() {
 		}
 		fp.Close()
 		os.Remove(tstfile)
+	}
+
+	if connfile != "" {
+		_, err := loadConnFile(connfile)
+		if err != nil {
+			die("cannot load per-connection config information from '%s': %s\n", connfile, err)
+		}
 	}
 
 	// Turn the rules file string into filenames and verify that they
