@@ -7,7 +7,6 @@ package main
 import (
 	"bufio"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -53,10 +52,6 @@ func (d *destMap) find(nc net.Conn) *perDest {
 // Format of the file is:
 //	ip-or-cidr	[hostname=<....>] [cert=<file> key=<file>]
 
-func errFmt(format string, elems ...interface{}) error {
-	return errors.New(fmt.Sprintf(format, elems...))
-}
-
 func readConnFile(rdr *bufio.Reader) (*destMap, error) {
 	var d destMap
 
@@ -82,7 +77,7 @@ func readConnFile(rdr *bufio.Reader) (*destMap, error) {
 		// lines.
 		ls := strings.Fields(line)
 		if len(ls) > 4 {
-			return nil, errFmt("too many fields in line %d", lnum)
+			return nil, fmt.Errorf("too many fields in line %d", lnum)
 		}
 		// TODO: should check that ls[0] is a valid local name.
 		pd := &perDest{local: ls[0]}
@@ -91,7 +86,7 @@ func readConnFile(rdr *bufio.Reader) (*destMap, error) {
 		for _, s := range ls[1:] {
 			kv := strings.SplitN(s, "=", 2)
 			if len(kv) != 2 {
-				return nil, errFmt("field has no = in line %d", lnum)
+				return nil, fmt.Errorf("field has no = in line %d", lnum)
 			}
 			switch kv[0] {
 			case "hostname":
@@ -101,7 +96,7 @@ func readConnFile(rdr *bufio.Reader) (*destMap, error) {
 			case "key":
 				key = kv[1]
 			default:
-				return nil, errFmt("unrecognized key '%s' in line %d", kv[0], lnum)
+				return nil, fmt.Errorf("unrecognized key '%s' in line %d", kv[0], lnum)
 			}
 		}
 
@@ -111,13 +106,13 @@ func readConnFile(rdr *bufio.Reader) (*destMap, error) {
 		case cert != "" && key != "":
 			cert, err := tls.LoadX509KeyPair(cert, key)
 			if err != nil {
-				return nil, errFmt("error loading TLS cert and key from line %d: %s", lnum, err)
+				return nil, fmt.Errorf("error loading TLS cert and key from line %d: %s", lnum, err)
 			}
 			pd.certs = []tls.Certificate{cert}
 		case cert != "":
-			return nil, errFmt("certificate without key on line %d", lnum)
+			return nil, fmt.Errorf("certificate without key on line %d", lnum)
 		case key != "":
-			return nil, errFmt("key without certificate on line %d", lnum)
+			return nil, fmt.Errorf("key without certificate on line %d", lnum)
 		}
 		d = append(d, pd)
 	}
