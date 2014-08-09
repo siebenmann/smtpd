@@ -42,7 +42,7 @@ const TimeFmt = "2006-01-02 15:04:05 -0700"
 type Command int
 
 // Recognized SMTP commands. Not all of them do anything
-// (eg AUTH, VRFY, and EXPN are just refused).
+// (e.g. VRFY and EXPN are just refused).
 const (
 	noCmd  Command = iota // artificial zero value
 	BadCmd Command = iota
@@ -374,7 +374,7 @@ type Conn struct {
 
 	state         conState
 	badcmds       int  // count of bad commands so far
-	authenticated bool // true after successful auth exchange
+	authenticated bool // true after successful auth dialog
 
 	// queued event returned by a forthcoming Next call
 	nextEvent *EventInfo
@@ -396,7 +396,7 @@ const (
 	_         Event = iota // make uninitialized Event an error.
 	COMMAND   Event = iota
 	AUTHRESP        // client sent SASL response
-	AUTHABORT       // client aborted SASL exchange
+	AUTHABORT       // client aborted SASL dialog
 	GOTDATA
 	DONE
 	ABORT
