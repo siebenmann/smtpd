@@ -484,14 +484,14 @@ func TestAuthenticateSuccess(t *testing.T) {
 			case COMMAND:
 				if evt.Cmd == AUTH {
 					wantInput := [][]byte{
-						[]byte{},
+						{},
 						[]byte("initial-response"),
 						[]byte("subsequent-response"),
 						[]byte("final-response"),
 					}
 					challenges := [][]byte{
 						[]byte("c0"),
-						[]byte{},
+						{},
 						nil,
 					}
 					i := 0
