@@ -16,49 +16,50 @@ import (
 // This should contain only things that are actually valid. Do not test
 // error handling here.
 var smtpValidTests = []struct {
-	line string  // Input line
-	cmd  Command // Output SMTP command
-	arg  string  // Output argument
+	line   string  // Input line
+	cmd    Command // Output SMTP command
+	arg    string  // Output argument
+	params string  // Output params
 }{
-	{"HELO localhost", HELO, "localhost"},
-	{"HELO", HELO, ""},
-	{"EHLO fred", EHLO, "fred"},
-	{"EHLO", EHLO, ""},
-	{"MAIL FROM:<>", MAILFROM, ""},
-	{"MAIL FROM:<fred@example.com>", MAILFROM, "fred@example.com"},
-	{"RCPT TO:<fred@example.com>", RCPTTO, "fred@example.com"},
-	{"DATA", DATA, ""},
-	{"QUIT", QUIT, ""},
-	{"RSET", RSET, ""},
-	{"NOOP", NOOP, ""},
-	{"VRFY fred@example.org", VRFY, "fred@example.org"},
-	{"EXPN fred@example.net", EXPN, "fred@example.net"},
-	{"HELP barney", HELP, "barney"},
-	{"HELP", HELP, ""},
-	{"STARTTLS", STARTTLS, ""},
-	{"AUTH PLAIN dGVzdAB0ZXN0ADEyMzQ=", AUTH, "PLAIN dGVzdAB0ZXN0ADEyMzQ="},
+	{"HELO localhost", HELO, "localhost", ""},
+	{"HELO", HELO, "", ""},
+	{"EHLO fred", EHLO, "fred", ""},
+	{"EHLO", EHLO, "", ""},
+	{"MAIL FROM:<>", MAILFROM, "", ""},
+	{"MAIL FROM:<fred@example.com>", MAILFROM, "fred@example.com", ""},
+	{"RCPT TO:<fred@example.com>", RCPTTO, "fred@example.com", ""},
+	{"DATA", DATA, "", ""},
+	{"QUIT", QUIT, "", ""},
+	{"RSET", RSET, "", ""},
+	{"NOOP", NOOP, "", ""},
+	{"VRFY fred@example.org", VRFY, "fred@example.org", ""},
+	{"EXPN fred@example.net", EXPN, "fred@example.net", ""},
+	{"HELP barney", HELP, "barney", ""},
+	{"HELP", HELP, "", ""},
+	{"STARTTLS", STARTTLS, "", ""},
+	{"AUTH PLAIN dGVzdAB0ZXN0ADEyMzQ=", AUTH, "PLAIN", "dGVzdAB0ZXN0ADEyMzQ="},
 
 	// Torture cases.
-	{"RCPT TO:<a>", RCPTTO, "a"}, // Minimal address
-	{"HELO    ", HELO, ""},       // all blank optional argument
-	{"HELO   a    ", HELO, "a"},  // whitespace in argument
+	{"RCPT TO:<a>", RCPTTO, "a", ""}, // Minimal address
+	{"HELO    ", HELO, "", ""},       // all blank optional argument
+	{"HELO   a    ", HELO, "a", ""},  // whitespace in argument
 
 	// Accepted as valid by ParseCmd even if they're wrong by the views
 	// of higher layers.
-	{"RCPT TO:<>", RCPTTO, ""},
-	{"MAIL FROM:<<>>", MAILFROM, "<>"},
-	{"MAIL FROM:<barney>", MAILFROM, "barney"},
+	{"RCPT TO:<>", RCPTTO, "", ""},
+	{"MAIL FROM:<<>>", MAILFROM, "<>", ""},
+	{"MAIL FROM:<barney>", MAILFROM, "barney", ""},
 
 	// Extended MAIL FROM and RCPT TO with additional arguments.
-	{"MAIL FROM:<fred@example.mil> SIZE=10000", MAILFROM, "fred@example.mil"},
-	{"RCPT TO:<fred@example.mil> SIZE=100", RCPTTO, "fred@example.mil"},
+	{"MAIL FROM:<fred@example.mil> SIZE=10000", MAILFROM, "fred@example.mil", "SIZE=10000"},
+	{"RCPT TO:<fred@example.mil> SIZE=100", RCPTTO, "fred@example.mil", "SIZE=100"},
 
 	// commands in lower case and mixed case, preserving argument case
-	{"mail from:<FreD@Barney>", MAILFROM, "FreD@Barney"},
-	{"Rcpt To:<joe@joe>", RCPTTO, "joe@joe"},
+	{"mail from:<FreD@Barney>", MAILFROM, "FreD@Barney", ""},
+	{"Rcpt To:<joe@joe>", RCPTTO, "joe@joe", ""},
 
 	// Space after MAIL FROM:
-	{"MAIL FROM: <fred@barney>", MAILFROM, "fred@barney"},
+	{"MAIL FROM: <fred@barney>", MAILFROM, "fred@barney", ""},
 }
 
 func TestGoodParses(t *testing.T) {
@@ -175,7 +176,11 @@ func (f faker) RemoteAddr() net.Addr {
 
 // returns expected server output \r\n'd, and the actual output.
 // current approach cribbed from the net/smtp tests.
-func runSmtpTest(serverStr, clientStr string) (string, string) {
+func runSmtpTest(
+	serverStr, clientStr string,
+	config Config,
+	loop func(*Conn),
+) (string, string) {
 	server := strings.Join(strings.Split(serverStr, "\n"), "\r\n")
 	client := strings.Join(strings.Split(clientStr, "\n"), "\r\n")
 
@@ -185,20 +190,25 @@ func runSmtpTest(serverStr, clientStr string) (string, string) {
 	cxn := &faker{ReadWriter: bufio.NewReadWriter(reader, writer)}
 
 	// Server(reader, writer)
-	var evt EventInfo
-	conn := NewConn(cxn, Config{}, nil)
-	for {
-		evt = conn.Next()
-		if evt.What == DONE || evt.What == ABORT {
-			break
-		}
-	}
-
+	conn := NewConn(cxn, config, nil)
+	loop(conn)
 	writer.Flush()
 	return server, outbuf.String()
 }
+
+func runSimpleSmtpTest(serverStr, clientStr string) (string, string) {
+	return runSmtpTest(serverStr, clientStr, Config{}, func(c *Conn) {
+		for {
+			evt := c.Next()
+			if evt.What == DONE || evt.What == ABORT {
+				break
+			}
+		}
+	})
+}
+
 func TestBasicSmtpd(t *testing.T) {
-	server, actualout := runSmtpTest(basicServer, basicClient)
+	server, actualout := runSimpleSmtpTest(basicServer, basicClient)
 	if actualout != server {
 		t.Fatalf("Got:\n%s\nExpected:\n%s", actualout, server)
 	}
@@ -244,7 +254,7 @@ var basicServer = `220 localhost go-smtpd
 `
 
 func TestSequenceErrors(t *testing.T) {
-	server, actualout := runSmtpTest(sequenceServer, sequenceClient)
+	server, actualout := runSimpleSmtpTest(sequenceServer, sequenceClient)
 	if actualout != server {
 		t.Fatalf("Got:\n%s\nExpected:\n%s", actualout, server)
 	}
@@ -341,5 +351,230 @@ func TestSequence(t *testing.T) {
 		if evt.What == DONE {
 			break
 		}
+	}
+}
+
+var authClient1 = `EHLO localhost
+MAIL FROM:<a@b.com>
+AUTH NOT-ADVERTISED
+AUTH TEST initial-auth-resp
+*
+MAIL FROM:<a@b.com>
+QUIT
+`
+var authServer1 = `220 localhost go-smtpd
+250-localhost Hello 127.10.10.100:56789
+250-8BITMIME
+250-PIPELINING
+250-AUTH PLAIN LOGIN TEST
+250 HELP
+530 Authentication required
+504 Command parameter not implemented
+334 Y2hhbGxlbmdl
+501 Authentication aborted
+530 Authentication required
+221 Goodbye
+`
+
+func TestAuthEvents(t *testing.T) {
+	cfg := Config{
+		Auth: &AuthConfig{Mechanisms: []string{"PLAIN", "LOGIN", "TEST"}},
+	}
+	server, actualout := runSmtpTest(authServer1, authClient1, cfg, func(c *Conn) {
+		var lastevt EventInfo
+		for {
+			evt := c.Next()
+			switch evt.What {
+			case DONE:
+				return
+			case AUTHRESP:
+				if evt.Arg != "initial-auth-resp" {
+					t.Errorf("event arg mismatch, got %q, want %q", evt.Arg, "initial-auth-resp")
+				}
+				if !(lastevt.What == COMMAND && lastevt.Cmd == AUTH) {
+					t.Error("Next returned out-of-order AUTHRESP, previous event", lastevt)
+				}
+				c.AuthChallenge([]byte("challenge"))
+			case AUTHABORT:
+				if lastevt.What != AUTHRESP {
+					t.Error("Next returned out-of-order AUTHABORT, previous event", lastevt)
+				}
+			case COMMAND:
+				if evt.Cmd == AUTH {
+					if evt.Arg != "TEST" {
+						t.Fatalf("event arg mismatch, got %q, want %q", evt.Arg, "TEST")
+					}
+				} else {
+					c.Accept()
+				}
+			default:
+				t.Fatalf("unexpected event: %+v", evt)
+			}
+			lastevt = evt
+		}
+	})
+	if actualout != server {
+		t.Errorf("Server log mismatch, Got:\n%s\nExpected:\n%s", actualout, server)
+	}
+}
+
+var authClient2 = `EHLO localhost
+AUTH TEST
+AUTH TEST
+QUIT
+`
+var authServer2 = `220 localhost go-smtpd
+250-localhost Hello 127.10.10.100:56789
+250-8BITMIME
+250-PIPELINING
+250-AUTH TEST
+250 HELP
+235 Authentication successful
+503 Out of sequence command
+221 Goodbye
+`
+
+func TestAuthOnce(t *testing.T) {
+	cfg := Config{
+		Auth: &AuthConfig{Mechanisms: []string{"TEST"}},
+	}
+	server, actualout := runSmtpTest(authServer2, authClient2, cfg, func(c *Conn) {
+		for {
+			evt := c.Next()
+			if evt.What == DONE || evt.What == ABORT {
+				return
+			}
+			c.Accept()
+		}
+	})
+	if actualout != server {
+		t.Errorf("Server log mismatch, Got:\n%s\nExpected:\n%s", actualout, server)
+	}
+}
+
+var authClient3 = `EHLO localhost
+AUTH TEST =
+aW5pdGlhbC1yZXNwb25zZQ==
+c3Vic2VxdWVudC1yZXNwb25zZQ==
+ZmluYWwtcmVzcG9uc2U=
+QUIT
+`
+var authServer3 = `220 localhost go-smtpd
+250-localhost Hello 127.10.10.100:56789
+250-8BITMIME
+250-PIPELINING
+250-AUTH TEST
+250 HELP
+334 YzA=
+334 ` + `
+334 ` + `
+235 Authentication successful
+221 Goodbye
+`
+
+func TestAuthenticateSuccess(t *testing.T) {
+	cfg := Config{
+		Auth: &AuthConfig{Mechanisms: []string{"TEST"}},
+	}
+	server, actualout := runSmtpTest(authServer3, authClient3, cfg, func(c *Conn) {
+		for {
+			switch evt := c.Next(); evt.What {
+			case DONE:
+				return
+			case COMMAND:
+				if evt.Cmd == AUTH {
+					wantInput := [][]byte{
+						[]byte{},
+						[]byte("initial-response"),
+						[]byte("subsequent-response"),
+						[]byte("final-response"),
+					}
+					challenges := [][]byte{
+						[]byte("c0"),
+						[]byte{},
+						nil,
+					}
+					i := 0
+					success := c.Authenticate(func(c *Conn, input []byte) {
+						if i >= len(wantInput) {
+							t.Fatalf("AuthFunc called %d times, expected %d calls", i+1, len(wantInput))
+						}
+						if !bytes.Equal(input, wantInput[i]) {
+							t.Errorf("invalid input: got %q, expected %q", input, wantInput[i])
+						}
+						if i == len(wantInput)-1 {
+							c.Accept()
+						} else {
+							c.AuthChallenge(challenges[i])
+						}
+						i++
+					})
+					if !success {
+						t.Errorf("Authenticate returned false, should've returned true to indicate success.")
+					}
+				} else {
+					c.Accept()
+				}
+			default:
+				t.Fatalf("unexpected event: %+v", evt)
+			}
+		}
+	})
+	if actualout != server {
+		t.Errorf("Server log mismatch, Got:\n%s\nExpected:\n%s", actualout, server)
+	}
+}
+
+var authClient4 = `EHLO localhost
+AUTH TEST initial-resp
+AUTH TEST
+*
+AUTH TEST =
+*
+QUIT
+`
+var authServer4 = `220 localhost go-smtpd
+250-localhost Hello 127.10.10.100:56789
+250-8BITMIME
+250-PIPELINING
+250-AUTH TEST
+250 HELP
+501 Invalid authentication response
+334 ` + `
+501 Authentication aborted
+334 ` + `
+501 Authentication aborted
+221 Goodbye
+`
+
+func TestAuthenticateAborts(t *testing.T) {
+	cfg := Config{
+		Auth: &AuthConfig{Mechanisms: []string{"TEST"}},
+	}
+	server, actualout := runSmtpTest(authServer4, authClient4, cfg, func(c *Conn) {
+		for {
+			switch evt := c.Next(); evt.What {
+			case DONE:
+				return
+			case COMMAND:
+				if evt.Cmd == AUTH {
+					success := c.Authenticate(func(c *Conn, input []byte) {
+						if len(input) > 0 {
+							t.Errorf("unexpected non-empty AuthFunc input: %q", input)
+						}
+					})
+					if success {
+						t.Errorf("Authenticate returned true, should've returned false to indicate abort.")
+					}
+				} else {
+					c.Accept()
+				}
+			default:
+				t.Fatalf("unexpected event: %+v", evt)
+			}
+		}
+	})
+	if actualout != server {
+		t.Errorf("Server log mismatch, Got:\n%s\nExpected:\n%s", actualout, server)
 	}
 }

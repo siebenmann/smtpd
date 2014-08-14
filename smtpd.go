@@ -26,6 +26,7 @@ package smtpd
 import (
 	"bufio"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -41,7 +42,7 @@ const TimeFmt = "2006-01-02 15:04:05 -0700"
 type Command int
 
 // Recognized SMTP commands. Not all of them do anything
-// (eg AUTH, VRFY, and EXPN are just refused).
+// (e.g. VRFY and EXPN are just refused).
 const (
 	noCmd  Command = iota // artificial zero value
 	BadCmd Command = iota
@@ -64,9 +65,11 @@ const (
 // there was an error, empty otherwise. Cmd may be BadCmd or a
 // command, even if there was an error.
 type ParsedLine struct {
-	Cmd    Command
-	Arg    string
-	Params string // present only on ESMTP MAIL FROM and RCPT TO.
+	Cmd Command
+	Arg string
+	// Params is K=V for ESMTP MAIL FROM and RCPT TO
+	// or the initial SASL response for AUTH
+	Params string
 	Err    string
 }
 
@@ -79,6 +82,7 @@ const (
 	noArg cmdArgs = iota
 	canArg
 	mustArg
+	oneOrTwoArgs
 	colonAddress // for ':<addr>[ options...]'
 )
 
@@ -101,7 +105,7 @@ var smtpCommand = []struct {
 	{EXPN, "EXPN", mustArg},
 	{HELP, "HELP", canArg},
 	{STARTTLS, "STARTTLS", noArg},
-	{AUTH, "AUTH", mustArg},
+	{AUTH, "AUTH", oneOrTwoArgs},
 	// TODO: do I need any additional SMTP commands?
 }
 
@@ -199,6 +203,17 @@ func ParseCmd(line string) ParsedLine {
 			return res
 		}
 		res.Arg = t
+	case oneOrTwoArgs:
+		parts := strings.SplitN(line, " ", 3)
+		switch len(parts) {
+		case 1:
+			res.Err = "SMTP command requires at least one argument"
+		case 2:
+			res.Arg = parts[1]
+		case 3:
+			res.Arg = parts[1]
+			res.Params = parts[2]
+		}
 	case canArg:
 		if llen > clen+1 {
 			res.Arg = strings.TrimSpace(line[clen+1:])
@@ -264,6 +279,7 @@ const (
 	sStartup conState = iota // Must be zero value
 	sInitial conState = 1 << iota
 	sHelo
+	sAuth // during SASL dialog
 	sMail
 	sRcpt
 	sData
@@ -281,6 +297,7 @@ var states = map[Command]struct {
 }{
 	HELO:     {sInitial | sHelo, sHelo},
 	EHLO:     {sInitial | sHelo, sHelo},
+	AUTH:     {sHelo, sHelo},
 	MAILFROM: {sHelo, sMail},
 	RCPTTO:   {sMail | sRcpt, sRcpt},
 	DATA:     {sRcpt, sData},
@@ -317,11 +334,21 @@ var DefaultLimits = Limits{
 	NoParams: true,
 }
 
+// AuthConfig specifies the authentication mechanisms that
+// the server announces as supported.
+type AuthConfig struct {
+	// Both slices should contain uppercase SASL mechanism names,
+	// e.g. PLAIN, LOGIN, EXTERNAL.
+	Mechanisms    []string // Supported mechanisms before STARTTLS
+	TLSMechanisms []string // Supported mechanisms after STARTTLS
+}
+
 // Config represents the configuration for a Conn. If unset, Limits is
 // DefaultLimits, LocalName is 'localhost', and SftName is 'go-smtpd'.
 type Config struct {
 	TLSConfig *tls.Config   // TLS configuration if TLS is to be enabled
 	Limits    *Limits       // The limits applied to the connection
+	Auth      *AuthConfig   // If non-nil, client must authenticate before MAIL FROM
 	Delay     time.Duration // Delay every character in replies by this much.
 	SayTime   bool          // report the time and date in the server banner
 	LocalName string        // The local hostname to use in messages
@@ -345,8 +372,12 @@ type Conn struct {
 
 	cfg Config
 
-	state   conState
-	badcmds int // count of bad commands so far
+	state         conState
+	badcmds       int  // count of bad commands so far
+	authenticated bool // true after successful auth dialog
+
+	// queued event returned by a forthcoming Next call
+	nextEvent *EventInfo
 
 	// used for state tracking for Accept()/Reject()/Tempfail().
 	curcmd  Command
@@ -362,8 +393,10 @@ type Event int
 
 // The different types of SMTP events returned by Next()
 const (
-	_       Event = iota // make uninitialized Event an error.
-	COMMAND Event = iota
+	_         Event = iota // make uninitialized Event an error.
+	COMMAND   Event = iota
+	AUTHRESP        // client sent SASL response
+	AUTHABORT       // client aborted SASL dialog
 	GOTDATA
 	DONE
 	ABORT
@@ -477,6 +510,22 @@ func (c *Conn) readData() string {
 	return string(b)
 }
 
+const authInputLimit = 12288 // recommended by RFC4954
+
+func (c *Conn) readAuthResp() string {
+	c.conn.SetReadDeadline(time.Now().Add(c.cfg.Limits.CmdInput))
+	c.lr.N = authInputLimit
+	line, err := c.rdr.ReadLine()
+	if err != nil || c.lr.N == 0 {
+		c.state = sAbort
+		c.log("!", "auth input abort %s err: %v",
+			fmtBytesLeft(authInputLimit, c.lr.N), err)
+		return ""
+	}
+	c.log("r", line)
+	return line
+}
+
 func (c *Conn) stopme() bool {
 	return c.state == sAbort || c.badcmds > c.cfg.Limits.BadCmds || c.state == sQuit
 }
@@ -503,6 +552,14 @@ func (c *Conn) Accept() {
 		if c.cfg.TLSConfig != nil && !c.TLSOn {
 			c.reply("250-STARTTLS")
 		}
+		// RFC4954 notes: A server implementation MUST
+		// implement a configuration in which it does NOT
+		// permit any plaintext password mechanisms, unless
+		// either the STARTTLS [SMTP-TLS] command has been
+		// negotiated...
+		if c.cfg.Auth != nil {
+			c.reply("250-AUTH " + strings.Join(c.authMechanisms(), " "))
+		}
 		// We do not advertise SIZE because our size limits
 		// are different from the size limits that RFC 1870
 		// wants us to use. We impose a flat byte limit while
@@ -514,6 +571,9 @@ func (c *Conn) Accept() {
 		// (In general SIZE is hella annoying if you read the
 		// RFC religiously.)
 		c.reply("250 HELP")
+	case AUTH:
+		c.authDone(true)
+		c.reply("235 Authentication successful")
 	case MAILFROM, RCPTTO:
 		c.reply("250 Okay, I'll believe you for now")
 	case DATA:
@@ -547,6 +607,9 @@ func (c *Conn) AcceptMsg(format string, elems ...interface{}) {
 	switch c.curcmd {
 	case MAILFROM, RCPTTO:
 		c.replyMulti(250, format, elems...)
+	case AUTH:
+		c.authDone(true)
+		c.replyMulti(235, format, elems...)
 	case DATA:
 		if oldstate == sRcpt {
 			c.replyMulti(354, format, elems...)
@@ -587,6 +650,9 @@ func (c *Conn) Reject() {
 		c.reply("550 Not accepted")
 	case MAILFROM, RCPTTO:
 		c.reply("550 Bad address")
+	case AUTH:
+		c.authDone(false)
+		c.reply("535 Authentication credentials invalid")
 	case DATA:
 		c.reply("554 Not accepted")
 	}
@@ -600,6 +666,9 @@ func (c *Conn) RejectMsg(format string, elems ...interface{}) {
 	switch c.curcmd {
 	case HELO, EHLO, MAILFROM, RCPTTO:
 		c.replyMulti(550, format, elems...)
+	case AUTH:
+		c.authDone(false)
+		c.replyMulti(535, format, elems...)
 	case DATA:
 		c.replyMulti(554, format, elems...)
 	}
@@ -614,6 +683,9 @@ func (c *Conn) TempfailMsg(format string, elems ...interface{}) {
 	switch c.curcmd {
 	case HELO, EHLO:
 		c.replyMulti(421, format, elems...)
+	case AUTH:
+		c.authDone(false)
+		c.replyMulti(454, format, elems...)
 	case MAILFROM, RCPTTO, DATA:
 		c.replyMulti(450, format, elems...)
 	}
@@ -627,6 +699,9 @@ func (c *Conn) Tempfail() {
 	switch c.curcmd {
 	case HELO, EHLO:
 		c.reply("421 Not available now")
+	case AUTH:
+		c.authDone(false)
+		c.reply("454 Temporary authentication failure")
 	case MAILFROM, RCPTTO, DATA:
 		c.reply("450 Not available")
 	}
@@ -644,7 +719,7 @@ func mimeParam(l ParsedLine) bool {
 // Next returns the next high-level event from the SMTP connection.
 //
 // Next() guarantees that the SMTP protocol ordering requirements are
-// followed and only returns HELO/EHLO, MAIL FROM, RCPT TO, and DATA
+// followed and only returns HELO/EHLO, AUTH, MAIL FROM, RCPT TO, and DATA
 // commands, and the actual message submitted. The caller must reset
 // all accumulated information about a message when it sees either
 // EHLO/HELO or MAIL FROM.
@@ -654,6 +729,17 @@ func mimeParam(l ParsedLine) bool {
 // optional; Next() will do it for you implicitly.
 // It is invalid to call Next() after it has returned a DONE or ABORT
 // event.
+//
+// For the AUTH command, Next() will return a COMMAND event where
+// Arg is set to the mechanism requested by the client. The mechanism
+// is validated against the list of mechanisms provided in the config.
+// The AUTH command event begins an authentication dialog, during
+// which one or more AUTHRESP events are returned. The first AUTHRESP
+// event contains the initial response from the AUTH command and may
+// be empty. The dialog ends if an AUTHABORT event is returned or
+// if the AUTH command is accepted/rejected. Next will not
+// accept the AUTH command automatically. If no reply is sent for an
+// AUTHRESP event, the client receives an empty challenge.
 //
 // Next() does almost no checks on the value of EHLO/HELO, MAIL FROM,
 // and RCPT TO. For MAIL FROM and RCPT TO it requires them to
@@ -671,8 +757,19 @@ func mimeParam(l ParsedLine) bool {
 func (c *Conn) Next() EventInfo {
 	var evt EventInfo
 
+	if c.nextEvent != nil {
+		evt = *c.nextEvent
+		c.nextEvent = nil
+		return evt
+	}
 	if !c.replied && c.curcmd != noCmd {
-		c.Accept()
+		if c.state == sAuth {
+			// send empty challenge instead of auto accept
+			// to prevent accidental auth success.
+			c.AuthChallenge(nil)
+		} else {
+			c.Accept()
+		}
 	}
 	if c.state == sStartup {
 		var announce string
@@ -691,6 +788,21 @@ func (c *Conn) Next() EventInfo {
 			c.replyMulti(220, "%s %s%s", c.cfg.LocalName,
 				c.cfg.SftName, announce)
 		}
+	}
+
+	// Parse client auth response
+	if c.state == sAuth {
+		data := c.readAuthResp()
+		if data == "*" {
+			c.authDone(false)
+			c.reply("501 Authentication aborted")
+			evt.What = AUTHABORT
+		} else {
+			c.replied = false
+			evt.What = AUTHRESP
+			evt.Arg = data
+		}
+		return evt
 	}
 
 	// Read DATA chunk if called for.
@@ -815,20 +927,57 @@ func (c *Conn) Next() EventInfo {
 		c.replied = false
 		c.curcmd = res.Cmd
 
-		// RCPT TO:<> is invalid; reject it. Otherwise defer all
-		// address checking to our callers.
-		if res.Cmd == RCPTTO && len(res.Arg) == 0 {
-			c.Reject()
-			continue
-		}
-		// reject parameters that we don't accept, which right
-		// now is all of them. We reject with the RFC-correct
-		// reply instead of a generic one, so we can't use
-		// c.Reject().
-		if res.Params != "" && c.cfg.Limits.NoParams && !mimeParam(res) {
-			c.reply("504 Command parameter not implemented")
-			c.replied = true
-			continue
+		switch res.Cmd {
+		case AUTH:
+			if c.cfg.Auth == nil {
+				c.reply("502 Not supported")
+				c.replied = true
+				continue
+			}
+			if c.authenticated {
+				// RFC4954, section 4: After an AUTH command has been
+				// successfully completed, no more AUTH commands may be
+				// issued in the same session.
+				c.reply("503 Out of sequence command")
+				c.replied = true
+				continue
+			}
+			if !c.authMechanismValid(res.Arg) {
+				c.reply("504 Command parameter not implemented")
+				c.replied = true
+				continue
+			}
+			// Queue initial auth response for the next round.
+			// This way, all auth responses are delivered
+			// with event type AUTHRESP.
+			c.nextEvent = &EventInfo{What: AUTHRESP, Arg: res.Params}
+			res.Params = ""
+			c.state = sAuth
+		case MAILFROM, RCPTTO:
+			// Verify that the client has authenticated.
+			// We do this here because MAIL FROM is the only valid
+			// full state command after HELO/EHLO that requires
+			// authentication.
+			if c.cfg.Auth != nil && !c.authenticated {
+				c.reply("530 Authentication required")
+				c.replied = true
+				continue
+			}
+			// RCPT TO:<> is invalid; reject it. Otherwise defer all
+			// address checking to our callers.
+			if res.Cmd == RCPTTO && len(res.Arg) == 0 {
+				c.Reject()
+				continue
+			}
+			// reject parameters that we don't accept, which right
+			// now is all of them. We reject with the RFC-correct
+			// reply instead of a generic one, so we can't use
+			// c.Reject().
+			if res.Params != "" && c.cfg.Limits.NoParams && !mimeParam(res) {
+				c.reply("504 Command parameter not implemented")
+				c.replied = true
+				continue
+			}
 		}
 
 		// Real, valid, in sequence command. Deliver it to our
@@ -868,6 +1017,85 @@ func (c *Conn) setupConn(conn net.Conn) {
 	// it.
 	c.lr = io.LimitReader(conn, 4096).(*io.LimitedReader)
 	c.rdr = textproto.NewReader(bufio.NewReader(c.lr))
+}
+
+func (c *Conn) authMechanisms() []string {
+	// I won't bother checking for nil Auth config here
+	// because this is only used when authentication is enabled.
+	if c.TLSOn {
+		return c.cfg.Auth.TLSMechanisms
+	}
+	return c.cfg.Auth.Mechanisms
+}
+
+func (c *Conn) authMechanismValid(mech string) bool {
+	mech = strings.ToUpper(mech)
+	for _, m := range c.authMechanisms() {
+		if mech == m {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Conn) authDone(success bool) {
+	c.replied = true
+	c.state = sHelo
+	c.nextEvent = nil
+	c.authenticated = success
+}
+
+// AuthChallenge sends an authentication challenge to the client.
+// It only works during authentication.
+func (c *Conn) AuthChallenge(data []byte) {
+	if c.state != sAuth || c.replied {
+		return
+	}
+	c.reply("334 " + base64.StdEncoding.EncodeToString(data))
+	c.replied = true
+}
+
+// An AuthFunc implements a SASL authentication dialog.
+// The parameter input is the decoded SASL response from
+// the client. The function should either call Accept/Reject
+// on the connection or send a challenge using the AuthChallenge
+// method.
+type AuthFunc func(c *Conn, input []byte)
+
+// Authenticate executes a SASL authentication dialog with the client.
+// The given function is invoked until it signals Accept/Reject or
+// the client aborts the dialog. An empty challenge will be sent if
+// if the function does not generate a reply.
+func (c *Conn) Authenticate(mech AuthFunc) (success bool) {
+	for c.state == sAuth {
+		switch evt := c.Next(); evt.What {
+		case AUTHRESP:
+			var input []byte
+			switch evt.Arg {
+			case "":
+				input = nil
+			case "=":
+				// RFC4954: If the client is transmitting an initial
+				// response of zero length, it MUST instead transmit
+				// the response as a single equals sign ("="). This
+				// indicates that the response is present, but
+				// contains no data.
+				input = []byte{}
+			default:
+				var err error
+				input, err = base64.StdEncoding.DecodeString(evt.Arg)
+				if err != nil {
+					c.authDone(false)
+					c.reply("501 Invalid authentication response")
+					return false
+				}
+			}
+			mech(c, input)
+		case AUTHABORT, ABORT:
+			return false
+		}
+	}
+	return c.authenticated
 }
 
 // NewConn creates a new SMTP conversation from conn, the underlying
