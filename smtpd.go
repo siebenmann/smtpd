@@ -12,7 +12,8 @@
 // and then repeatedly call .Next() on it, which will return a
 // series of meaningful SMTP events, primarily EHLO/HELO, MAIL
 // FROM, RCPT TO, DATA, and then the message data if things get
-// that far.
+// that far. See the .Next documentation for a discussion on how
+// to handle AUTH, if this is desired.
 //
 // The Conn framework puts timeouts on input and output and size
 // limits on input messages (and input lines, but that's much larger
@@ -361,9 +362,10 @@ type Config struct {
 //
 // Note that this structure cannot be created by hand. Call NewConn.
 //
-// Conn connections advertise support for PIPELINING, 8BITMIME, and
-// also STARTTLS if a TLS certificate has been added through
-// the Config passed to NewConn().
+// Conn connections always advertise support for PIPELINING and
+// 8BITMIME.  STARTTLS is advertised if the Config passed to NewConn()
+// has a non-nil TLSConfig. AUTH is advertised if the Config has a
+// non-nil Auth.
 type Conn struct {
 	conn   net.Conn
 	lr     *io.LimitedReader // wraps conn as a reader
@@ -396,11 +398,11 @@ const (
 	_         Event = iota // make uninitialized Event an error.
 	COMMAND   Event = iota
 	AUTHRESP        // client sent SASL response
-	AUTHABORT       // client aborted SASL dialog
-	GOTDATA
-	DONE
-	ABORT
-	TLSERROR
+	AUTHABORT       // client aborted SASL dialog by sending '*'
+	GOTDATA         // received DATA
+	DONE            // client sent QUIT
+	ABORT           // input or output error or timeout.
+	TLSERROR        // error during TLS setup. Connection is dead.
 )
 
 // EventInfo is what Conn.Next() returns to represent events.
@@ -512,6 +514,9 @@ func (c *Conn) readData() string {
 
 const authInputLimit = 12288 // recommended by RFC4954
 
+// readAuthResp() reads an RFC4954 authentication response from the
+// client; it should be called only in state sAuth. If there is an
+// error, state will be set to sAbort.
 func (c *Conn) readAuthResp() string {
 	c.conn.SetReadDeadline(time.Now().Add(c.cfg.Limits.CmdInput))
 	c.lr.N = authInputLimit
@@ -590,11 +595,11 @@ func (c *Conn) Accept() {
 	c.replied = true
 }
 
-// AcceptMsg accepts MAIL FROM, RCPT TO, DATA, or message bodies with
-// the given fmt.Printf style message that you supply. The generated
-// message may include embedded newlines for a multi-line reply.
-// This cannot be applied to EHLO/HELO messages; if called for one
-// of them, it is equivalent to Accept().
+// AcceptMsg accepts MAIL FROM, RCPT TO, AUTH, DATA, or message bodies
+// with the given fmt.Printf style message that you supply. The
+// generated message may include embedded newlines for a multi-line
+// reply.  This cannot be applied to EHLO/HELO messages; if called for
+// one of them, it is equivalent to Accept().
 func (c *Conn) AcceptMsg(format string, elems ...interface{}) {
 	if c.curcmd == HELO || c.curcmd == EHLO || c.replied {
 		// We can't apply to EHLO/HELO because those have
@@ -730,16 +735,19 @@ func mimeParam(l ParsedLine) bool {
 // It is invalid to call Next() after it has returned a DONE or ABORT
 // event.
 //
-// For the AUTH command, Next() will return a COMMAND event where
-// Arg is set to the mechanism requested by the client. The mechanism
-// is validated against the list of mechanisms provided in the config.
+// For the AUTH command, Next() will return a COMMAND event where Arg
+// is set to the mechanism requested by the client. The mechanism is
+// validated against the list of mechanisms provided in the config.
 // The AUTH command event begins an authentication dialog, during
 // which one or more AUTHRESP events are returned. The first AUTHRESP
 // event contains the initial response from the AUTH command and may
-// be empty. The dialog ends if an AUTHABORT event is returned or
-// if the AUTH command is accepted/rejected. Next will not
-// accept the AUTH command automatically. If no reply is sent for an
-// AUTHRESP event, the client receives an empty challenge.
+// be empty. The dialog ends if an AUTHABORT or ABORT event is
+// returned or when the AUTH command is accepted/rejected. Next will
+// not accept the AUTH command automatically. If no reply is sent for
+// an AUTHRESP event, the client receives an empty challenge.  Under
+// almost all situations you want to respond to a AUTH command not
+// directly through calling .Next() but by calling .Authenticate() to
+// handle the full details.
 //
 // Next() does almost no checks on the value of EHLO/HELO, MAIL FROM,
 // and RCPT TO. For MAIL FROM and RCPT TO it requires them to
@@ -753,7 +761,10 @@ func mimeParam(l ParsedLine) bool {
 // TLSERROR is returned if the client tried STARTTLS on a TLS-enabled
 // connection but the TLS setup failed for some reason (eg the client
 // only supports SSLv2). The caller can use this to, eg, decide not to
-// offer TLS to that client in the future.
+// offer TLS to that client in the future. No further activity can
+// happen on a connection once TLSERROR is returned; the connection is
+// considered dead and calling .Next() again will yield an ABORT
+// event. The Arg of a TLSERROR event is the TLS error in string form.
 func (c *Conn) Next() EventInfo {
 	var evt EventInfo
 
@@ -790,9 +801,16 @@ func (c *Conn) Next() EventInfo {
 		}
 	}
 
-	// Parse client auth response
+	// Read and parse client AUTH response. Note that AUTH responses
+	// are not SMTP commands. During state sAuth, the only events we
+	// can return are AUTHRESP, AUTHABORT, and ABORT.
 	if c.state == sAuth {
 		data := c.readAuthResp()
+		if c.state == sAbort {
+			evt.What = ABORT
+			c.log("#", "abort at %v", time.Now().Format(TimeFmt))
+			return evt
+		}
 		if data == "*" {
 			c.authDone(false)
 			c.reply("501 Authentication aborted")
@@ -935,9 +953,10 @@ func (c *Conn) Next() EventInfo {
 				continue
 			}
 			if c.authenticated {
-				// RFC4954, section 4: After an AUTH command has been
-				// successfully completed, no more AUTH commands may be
-				// issued in the same session.
+				// RFC4954, section 4: After an AUTH
+				// command has been successfully
+				// completed, no more AUTH commands
+				// may be issued in the same session.
 				c.reply("503 Out of sequence command")
 				c.replied = true
 				continue
@@ -947,32 +966,32 @@ func (c *Conn) Next() EventInfo {
 				c.replied = true
 				continue
 			}
-			// Queue initial auth response for the next round.
-			// This way, all auth responses are delivered
-			// with event type AUTHRESP.
+			// Queue initial auth response for the next
+			// round.  This way, all auth responses are
+			// delivered with event type AUTHRESP.
 			c.nextEvent = &EventInfo{What: AUTHRESP, Arg: res.Params}
 			res.Params = ""
 			c.state = sAuth
 		case MAILFROM, RCPTTO:
 			// Verify that the client has authenticated.
-			// We do this here because MAIL FROM is the only valid
-			// full state command after HELO/EHLO that requires
-			// authentication.
+			// We do this here because MAIL FROM is the
+			// only valid full state command after
+			// HELO/EHLO that requires authentication.
 			if c.cfg.Auth != nil && !c.authenticated {
 				c.reply("530 Authentication required")
 				c.replied = true
 				continue
 			}
-			// RCPT TO:<> is invalid; reject it. Otherwise defer all
-			// address checking to our callers.
+			// RCPT TO:<> is invalid; reject it. Otherwise
+			// defer all address checking to our callers.
 			if res.Cmd == RCPTTO && len(res.Arg) == 0 {
 				c.Reject()
 				continue
 			}
-			// reject parameters that we don't accept, which right
-			// now is all of them. We reject with the RFC-correct
-			// reply instead of a generic one, so we can't use
-			// c.Reject().
+			// reject parameters that we don't accept,
+			// which right now is all of them. We reject
+			// with the RFC-correct reply instead of a
+			// generic one, so we can't use c.Reject().
 			if res.Params != "" && c.cfg.Limits.NoParams && !mimeParam(res) {
 				c.reply("504 Command parameter not implemented")
 				c.replied = true
@@ -1038,6 +1057,8 @@ func (c *Conn) authMechanismValid(mech string) bool {
 	return false
 }
 
+// authDone marks a RFC4954 AUTH sequence as being done (whether it
+// succeeded or failed). In the process we transition to state sHelo.
 func (c *Conn) authDone(success bool) {
 	c.replied = true
 	c.state = sHelo
@@ -1055,18 +1076,40 @@ func (c *Conn) AuthChallenge(data []byte) {
 	c.replied = true
 }
 
-// An AuthFunc implements a SASL authentication dialog.
-// The parameter input is the decoded SASL response from
-// the client. The function should either call Accept/Reject
-// on the connection or send a challenge using the AuthChallenge
-// method.
+// An AuthFunc implements one step of a SASL authentication dialog.
+// The parameter input is the decoded SASL response from the
+// client. Each time it's called, the function should either call
+// Accept/Reject on the connection or send a challenge using
+// AuthChallenge. The input parameter may be nil (the client sent
+// absolutely nothing) or empty (the client sent a '=').
+//
+// TODO: is a completely blank line an RFC error that should cause
+// the authentication to fail and the connection to abort?
+//
+// If an AuthFunc is called and does none of these, it is currently
+// equivalent to calling .AuthChallenge(nil). However doing this is
+// considered an error, not a guaranteed API, and may someday have
+// other effects (eg aborting the authentication dialog).
 type AuthFunc func(c *Conn, input []byte)
 
 // Authenticate executes a SASL authentication dialog with the client.
-// The given function is invoked until it signals Accept/Reject or
-// the client aborts the dialog. An empty challenge will be sent if
-// if the function does not generate a reply.
+// The given function is invoked until it calls Accept/Reject or the
+// client aborts the dialog (or an error happens).
+//
+// Note that Authenticate() may return after a network error. In
+// this case calling Next() will immediately return an ABORT event.
+// As a corollary there is no guarantee that your AuthFunc will be
+// called even once.
+//
+// Using a nil AuthFunc is an error. Authenticate() generously doesn't
+// panic on you and instead immediately rejects the authentication.
 func (c *Conn) Authenticate(mech AuthFunc) (success bool) {
+	if mech == nil {
+		// ha ha very funny, but let's not panic here.
+		c.Reject()
+		return false
+	}
+
 	for c.state == sAuth {
 		switch evt := c.Next(); evt.What {
 		case AUTHRESP:
@@ -1075,22 +1118,29 @@ func (c *Conn) Authenticate(mech AuthFunc) (success bool) {
 			case "":
 				input = nil
 			case "=":
-				// RFC4954: If the client is transmitting an initial
-				// response of zero length, it MUST instead transmit
-				// the response as a single equals sign ("="). This
-				// indicates that the response is present, but
+				// RFC4954: If the client is
+				// transmitting an initial response of
+				// zero length, it MUST instead
+				// transmit the response as a single
+				// equals sign ("="). This indicates
+				// that the response is present, but
 				// contains no data.
 				input = []byte{}
 			default:
 				var err error
 				input, err = base64.StdEncoding.DecodeString(evt.Arg)
 				if err != nil {
+					// We don't call .Reject()
+					// because we want to generate
+					// the RFC correct 501 error
+					// code.
 					c.authDone(false)
 					c.reply("501 Invalid authentication response")
 					return false
 				}
 			}
 			mech(c, input)
+
 		case AUTHABORT, ABORT:
 			return false
 		}
