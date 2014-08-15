@@ -43,6 +43,7 @@ var smtpValidTests = []struct {
 	{"RCPT TO:<a>", RCPTTO, "a", ""}, // Minimal address
 	{"HELO    ", HELO, "", ""},       // all blank optional argument
 	{"HELO   a    ", HELO, "a", ""},  // whitespace in argument
+	{"RSET ", RSET, "", ""},          // space after no-arg command
 
 	// Accepted as valid by ParseCmd even if they're wrong by the views
 	// of higher layers.
@@ -99,6 +100,8 @@ var smtpInvalidTests = []struct {
 	{"MAIL FROM:", MAILFROM, ""},
 	{"MAIL FROM:<", MAILFROM, ""},
 	{"MAIL FROM:<fred@barney", MAILFROM, ""},
+	// alleged 'argument' is all white space
+	{"MAIL FROM:      ", MAILFROM, ""},
 
 	// no space between > and param
 	{"MAIL FROM:<fred@barney>SIZE=100", MAILFROM, ""},

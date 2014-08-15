@@ -34,6 +34,7 @@ import (
 	"net/textproto"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // The time format we log messages in.
@@ -152,6 +153,12 @@ func ParseCmd(line string) ParsedLine {
 		return res
 	}
 
+	// Trim trailing space from the line, because some confused people
+	// send eg 'RSET ' or 'QUIT '. Probably other people put trailing
+	// spaces on other commands. This is probably not completely okay
+	// by the RFCs, but my view is 'real clients trump RFCs'.
+	line = strings.TrimRightFunc(line, unicode.IsSpace)
+
 	// Search in the command table for the prefix that matches. If
 	// it's not found, this is definitely not a good command.
 	// We search on an upper-case version of the line to make my life
@@ -197,7 +204,9 @@ func ParseCmd(line string) ParsedLine {
 			return res
 		}
 		// Even if there are nominal characters they could be
-		// all whitespace.
+		// all whitespace. Although we've trimmed trailing
+		// whitespace before now, there could be whitespace
+		// *before* the argument and we want to trim it too.
 		t := strings.TrimSpace(line[clen+1:])
 		if len(t) == 0 {
 			res.Err = "SMTP command requires an argument"
@@ -205,6 +214,9 @@ func ParseCmd(line string) ParsedLine {
 		}
 		res.Arg = t
 	case oneOrTwoArgs:
+		// This implicitly allows 'a b c', with 'b c' becoming
+		// the Params value.
+		// TODO: is this desirable? Is this allowed by the AUTH RFC?
 		parts := strings.SplitN(line, " ", 3)
 		switch len(parts) {
 		case 1:
@@ -216,6 +228,7 @@ func ParseCmd(line string) ParsedLine {
 			res.Params = parts[2]
 		}
 	case canArg:
+		// get rid of whitespace between command and the argument.
 		if llen > clen+1 {
 			res.Arg = strings.TrimSpace(line[clen+1:])
 		}
