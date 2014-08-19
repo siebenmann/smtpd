@@ -399,8 +399,8 @@ type Conn struct {
 	replied bool
 	nstate  conState // next state if command is accepted.
 
-	TLSOn     bool   // TLS is on in this connection
-	TLSCipher uint16 // Negociated TLS cipher. See net/tls.
+	TLSOn    bool                // TLS is on in this connection
+	TLSState tls.ConnectionState // TLS connection state
 }
 
 // An Event is the sort of event that is returned by Conn.Next().
@@ -940,9 +940,8 @@ func (c *Conn) Next() EventInfo {
 				// switch c.conn to tlsConn.
 				c.setupConn(tlsConn)
 				c.TLSOn = true
-				cs := tlsConn.ConnectionState()
-				c.log("!", "TLS negociated with cipher 0x%04x", cs.CipherSuite)
-				c.TLSCipher = cs.CipherSuite
+				c.TLSState = tlsConn.ConnectionState()
+				c.log("!", "TLS negociated with cipher 0x%04x server name '%s'", c.TLSState.CipherSuite, c.TLSState.ServerName)
 				// By the STARTTLS RFC, we return to our state
 				// immediately after the greeting banner
 				// and clients must re-EHLO.
