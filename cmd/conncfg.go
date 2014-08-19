@@ -104,11 +104,11 @@ func readConnFile(rdr *bufio.Reader) (*destMap, error) {
 		pd.myname = host
 		switch {
 		case cert != "" && key != "":
-			cert, err := tls.LoadX509KeyPair(cert, key)
+			certs, err := loadCerts(cert, key)
 			if err != nil {
-				return nil, fmt.Errorf("error loading TLS cert and key from line %d: %s", lnum, err)
+				return nil, fmt.Errorf("error loading TLS cert(s) and key(s) from line %d: %s", lnum, err)
 			}
-			pd.certs = []tls.Certificate{cert}
+			pd.certs = certs
 		case cert != "":
 			return nil, fmt.Errorf("certificate without key on line %d", lnum)
 		case key != "":

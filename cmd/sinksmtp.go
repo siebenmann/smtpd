@@ -298,8 +298,9 @@ type smtpTransaction struct {
 
 	// Reflects the current state, so tlson false can convert to
 	// tlson true over time. cipher is valid only if tlson is true.
-	tlson  bool
-	cipher uint16
+	tlson      bool
+	cipher     uint16
+	servername string
 
 	// Make our logger accessible in decider() as a hack.
 	log     *smtpLogger
@@ -366,6 +367,9 @@ func msgDetails(prefix string, trans *smtpTransaction) ([]byte, string) {
 		fmt.Fprintf(writer, "tls on cipher 0x%04x", trans.cipher)
 		if cn := cipherNames[trans.cipher]; cn != "" {
 			fmt.Fprintf(writer, " name %s", cn)
+		}
+		if trans.servername != "" {
+			fmt.Fprintf(writer, " server-name '%s'", trans.servername)
 		}
 		fmt.Fprintf(writer, "\n")
 	}
@@ -714,6 +718,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 		tlsc.ClientAuth = tls.VerifyClientCertIfGiven
 		tlsc.SessionTicketsDisabled = true
 		tlsc.ServerName = sname
+		tlsc.BuildNameToCertificate()
 		cfg.TLSConfig = &tlsc
 	}
 
@@ -786,7 +791,8 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 			trans.data = evt.Arg
 			trans.when = time.Now()
 			trans.tlson = convo.TLSOn
-			trans.cipher = convo.TLSCipher
+			trans.cipher = convo.TLSState.CipherSuite
+			trans.servername = convo.TLSState.ServerName
 			trans.hash, trans.bodyhash = getHashes(trans)
 			transid, err := handleMessage(prefix, trans, logf)
 			// errors when handling a message always force
@@ -844,6 +850,29 @@ func listener(conn net.Listener, listenc chan net.Conn) {
 			listenc <- nc
 		}
 	}
+}
+
+// loadCerts loads certificates and keys from files. If there are
+// multiple certs and keys, the list of each must be comma-separated,
+// eg 'cert1.crt,cert2.crt' and 'key1.key,key2.key'.
+func loadCerts(certs, keys string) ([]tls.Certificate, error) {
+	clist := strings.Split(certs, ",")
+	klist := strings.Split(keys, ",")
+	if len(clist) != len(klist) {
+		return nil, fmt.Errorf("Different number of certificates and keys")
+	}
+	res := make([]tls.Certificate, 0, len(clist))
+	for i := range clist {
+		cert, err := tls.LoadX509KeyPair(clist[i], klist[i])
+		if err != nil {
+			if len(clist) > 1 {
+				return nil, fmt.Errorf("while loading %s & %s: %v", clist[i], klist[i], err)
+			}
+			return nil, err
+		}
+		res = append(res, cert)
+	}
+	return res, nil
 }
 
 // Our absurd collection of global settings.
@@ -1034,11 +1063,11 @@ func main() {
 
 	switch {
 	case certfile != "" && keyfile != "":
-		cert, err := tls.LoadX509KeyPair(certfile, keyfile)
+		var err error
+		certs, err = loadCerts(certfile, keyfile)
 		if err != nil {
-			die("error loading TLS cert from %s & %s: %v\n", certfile, keyfile, err)
+			die("error loading TLS cert(s) from %s & %s: %v\n", certfile, keyfile, err)
 		}
-		certs = []tls.Certificate{cert}
 
 	case certfile != "":
 		die("certfile specified without keyfile\n")

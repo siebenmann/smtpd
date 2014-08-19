@@ -29,6 +29,10 @@ This attempts to group options together logically.
 		and in fact you probably should use only self-signed
 		certificates with sinksmtp; see the TLS section.
 		You must give both options together (or neither).
+		You can use multiple certificates and keys by separating
+		each one with a ',', eg '-c c1.crt,c2.crt -k k1.key,k2.key'.
+		If there are multiple certificates given, Go TLS will use
+		SNI to pick an appropriate one if possible.
 
 	-conncfg FILE
 		This file can be used to specify the -helo and -c/-k
@@ -215,7 +219,10 @@ LOCAL is either an IP address, an 'IP:PORT' value, a CIDR, or '*' to mean
 'matches everything'. It controls what incoming connections match this
 line. The hostname setting is the -helo setting used for the connection;
 cert= and key= set the files for the TLS certificate and key. Either or
-both are optional and the parameters can be in any order.
+both are optional and the parameters can be in any order. The cert=
+and key= settings behave like the -c and -k command line arguments in
+that they can be given multiple certificates and keys, separated by
+commas (eg 'cert=c1.crt,c2.crt key=k1.key,k2,key').
 
 Lines are checked in order; the first matching line determines the
 settings for the connection. Thus you would normally stick any '*'
