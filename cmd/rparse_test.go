@@ -105,8 +105,10 @@ func setupFile(c *Context, name, conts string) error {
 	return nil
 }
 func setupContext(t *testing.T) *Context {
-	rd := &rDNSResults{[]string{"a.b.c", "d.e.f"}, []string{"g"},
-		[]string{"h.i"}}
+	// We must mimic the trailing '.' on real DNS results in order
+	// to make sure we're really testing against an authentic setup.
+	rd := &rDNSResults{[]string{"a.b.c.", "d.e.f."}, []string{"g."},
+		[]string{"h.i."}}
 	st := &smtpTransaction{
 		rdns:  rd,
 		tlson: true,

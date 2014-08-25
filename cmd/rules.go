@@ -322,8 +322,14 @@ func matchAddress(addr string, pat string) bool {
 }
 
 // match a hostname against a hostname pattern
+// NOTE: because rDNS names end in '.', we accept 'a.b.' as matching the
+// pattern 'a.b', ie we strip off the trailing dot from the hostname.
+// This stripping is suppressed if the pattern ends in a '.' itself.
 func matchHost(host string, pat string) bool {
 	host = strings.ToLower(host)
+	if host[len(host)-1] == '.' && pat[len(pat)-1] != '.' {
+		host = host[:len(host)-1]
+	}
 	if host == pat || "."+host == pat {
 		return true
 	}
