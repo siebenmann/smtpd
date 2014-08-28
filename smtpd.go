@@ -379,13 +379,18 @@ type Config struct {
 // 8BITMIME.  STARTTLS is advertised if the Config passed to NewConn()
 // has a non-nil TLSConfig. AUTH is advertised if the Config has a
 // non-nil Auth.
+//
+// Conn.Config can be altered to some degree after Conn is created in
+// order to manipulate features on the fly. Note that Conn.Config.Limits
+// is a pointer and so its fields should not be altered unless you
+// know what you're doing and it's your Limits to start with.
 type Conn struct {
 	conn   net.Conn
 	lr     *io.LimitedReader // wraps conn as a reader
 	rdr    *textproto.Reader // wraps lr
 	logger io.Writer
 
-	cfg Config
+	Config Config // Connection configuration
 
 	state         conState
 	badcmds       int  // count of bad commands so far
@@ -444,7 +449,7 @@ func (c *Conn) slowWrite(b []byte) (n int, err error) {
 		if err != nil {
 			break
 		}
-		time.Sleep(c.cfg.Delay)
+		time.Sleep(c.Config.Delay)
 	}
 	return cnt, err
 }
@@ -457,9 +462,9 @@ func (c *Conn) reply(format string, elems ...interface{}) {
 	// we can ignore the length returned, because Write()'s contract
 	// is that it returns a non-nil err if n < len(b).
 	// We are cautious about our write deadline.
-	wd := c.cfg.Delay * time.Duration(len(b))
-	c.conn.SetWriteDeadline(time.Now().Add(c.cfg.Limits.ReplyOut + wd))
-	if c.cfg.Delay > 0 {
+	wd := c.Config.Delay * time.Duration(len(b))
+	c.conn.SetWriteDeadline(time.Now().Add(c.Config.Limits.ReplyOut + wd))
+	if c.Config.Delay > 0 {
 		_, err = c.slowWrite(b)
 	} else {
 		_, err = c.conn.Write(b)
@@ -496,7 +501,7 @@ func (c *Conn) readCmd() string {
 	// This is much bigger than the RFC requires.
 	c.lr.N = 2048
 	// Allow two minutes per command.
-	c.conn.SetReadDeadline(time.Now().Add(c.cfg.Limits.CmdInput))
+	c.conn.SetReadDeadline(time.Now().Add(c.Config.Limits.CmdInput))
 	line, err := c.rdr.ReadLine()
 	// abort not just on errors but if the line length is exhausted.
 	if err != nil || c.lr.N == 0 {
@@ -511,14 +516,14 @@ func (c *Conn) readCmd() string {
 }
 
 func (c *Conn) readData() string {
-	c.conn.SetReadDeadline(time.Now().Add(c.cfg.Limits.MsgInput))
-	c.lr.N = c.cfg.Limits.MsgSize
+	c.conn.SetReadDeadline(time.Now().Add(c.Config.Limits.MsgInput))
+	c.lr.N = c.Config.Limits.MsgSize
 	b, err := c.rdr.ReadDotBytes()
 	if err != nil || c.lr.N == 0 {
 		c.state = sAbort
 		b = nil
 		c.log("!", "DATA abort %s err: %v",
-			fmtBytesLeft(c.cfg.Limits.MsgSize, c.lr.N), err)
+			fmtBytesLeft(c.Config.Limits.MsgSize, c.lr.N), err)
 	} else {
 		c.log("r", ". <end of data>")
 	}
@@ -531,7 +536,7 @@ const authInputLimit = 12288 // recommended by RFC4954
 // client; it should be called only in state sAuth. If there is an
 // error, state will be set to sAbort.
 func (c *Conn) readAuthResp() string {
-	c.conn.SetReadDeadline(time.Now().Add(c.cfg.Limits.CmdInput))
+	c.conn.SetReadDeadline(time.Now().Add(c.Config.Limits.CmdInput))
 	c.lr.N = authInputLimit
 	line, err := c.rdr.ReadLine()
 	if err != nil || c.lr.N == 0 {
@@ -545,7 +550,7 @@ func (c *Conn) readAuthResp() string {
 }
 
 func (c *Conn) stopme() bool {
-	return c.state == sAbort || c.badcmds > c.cfg.Limits.BadCmds || c.state == sQuit
+	return c.state == sAbort || c.badcmds > c.Config.Limits.BadCmds || c.state == sQuit
 }
 
 // Accept accepts the current SMTP command, ie gives an appropriate
@@ -558,16 +563,16 @@ func (c *Conn) Accept() {
 	c.state = c.nstate
 	switch c.curcmd {
 	case HELO:
-		c.reply("250 %s Hello %v", c.cfg.LocalName, c.conn.RemoteAddr())
+		c.reply("250 %s Hello %v", c.Config.LocalName, c.conn.RemoteAddr())
 	case EHLO:
-		c.reply("250-%s Hello %v", c.cfg.LocalName, c.conn.RemoteAddr())
+		c.reply("250-%s Hello %v", c.Config.LocalName, c.conn.RemoteAddr())
 		// We advertise 8BITMIME per
 		// http://cr.yp.to/smtp/8bitmime.html
 		c.reply("250-8BITMIME")
 		c.reply("250-PIPELINING")
 		// STARTTLS RFC says: MUST NOT advertise STARTTLS
 		// after TLS is on.
-		if c.cfg.TLSConfig != nil && !c.TLSOn {
+		if c.Config.TLSConfig != nil && !c.TLSOn {
 			c.reply("250-STARTTLS")
 		}
 		// RFC4954 notes: A server implementation MUST
@@ -575,7 +580,7 @@ func (c *Conn) Accept() {
 		// permit any plaintext password mechanisms, unless
 		// either the STARTTLS [SMTP-TLS] command has been
 		// negotiated...
-		if c.cfg.Auth != nil {
+		if c.Config.Auth != nil {
 			c.reply("250-AUTH " + strings.Join(c.authMechanisms(), " "))
 		}
 		// We do not advertise SIZE because our size limits
@@ -801,16 +806,16 @@ func (c *Conn) Next() EventInfo {
 		// log preceeds the banner in case the banner hits an error.
 		c.log("#", "remote %v at %s", c.conn.RemoteAddr(),
 			time.Now().Format(TimeFmt))
-		if c.cfg.Announce != "" {
-			announce = "\n" + c.cfg.Announce
+		if c.Config.Announce != "" {
+			announce = "\n" + c.Config.Announce
 		}
-		if c.cfg.SayTime {
+		if c.Config.SayTime {
 			c.replyMulti(220, "%s %s %s%s",
-				c.cfg.LocalName, c.cfg.SftName,
+				c.Config.LocalName, c.Config.SftName,
 				time.Now().Format(time.RFC1123Z), announce)
 		} else {
-			c.replyMulti(220, "%s %s%s", c.cfg.LocalName,
-				c.cfg.SftName, announce)
+			c.replyMulti(220, "%s %s%s", c.Config.LocalName,
+				c.Config.SftName, announce)
 		}
 	}
 
@@ -910,7 +915,7 @@ func (c *Conn) Next() EventInfo {
 			case HELP:
 				c.reply("214 No help here")
 			case STARTTLS:
-				if c.cfg.TLSConfig == nil || c.TLSOn {
+				if c.Config.TLSConfig == nil || c.TLSOn {
 					c.reply("502 Not supported")
 					continue
 				}
@@ -922,8 +927,8 @@ func (c *Conn) Next() EventInfo {
 				// conn outside of our normal framework, we
 				// must reset both read and write timeouts
 				// to our TLS setup timeout.
-				c.conn.SetDeadline(time.Now().Add(c.cfg.Limits.TLSSetup))
-				tlsConn := tls.Server(c.conn, c.cfg.TLSConfig)
+				c.conn.SetDeadline(time.Now().Add(c.Config.Limits.TLSSetup))
+				tlsConn := tls.Server(c.conn, c.Config.TLSConfig)
 				err := tlsConn.Handshake()
 				if err != nil {
 					c.log("!", "TLS setup failed: %v", err)
@@ -959,7 +964,7 @@ func (c *Conn) Next() EventInfo {
 
 		switch res.Cmd {
 		case AUTH:
-			if c.cfg.Auth == nil {
+			if c.Config.Auth == nil {
 				c.reply("502 Not supported")
 				c.replied = true
 				continue
@@ -989,7 +994,7 @@ func (c *Conn) Next() EventInfo {
 			// We do this here because MAIL FROM is the
 			// only valid full state command after
 			// HELO/EHLO that requires authentication.
-			if c.cfg.Auth != nil && !c.authenticated {
+			if c.Config.Auth != nil && !c.authenticated {
 				c.reply("530 Authentication required")
 				c.replied = true
 				continue
@@ -1004,7 +1009,7 @@ func (c *Conn) Next() EventInfo {
 			// which right now is all of them. We reject
 			// with the RFC-correct reply instead of a
 			// generic one, so we can't use c.Reject().
-			if res.Params != "" && c.cfg.Limits.NoParams && !mimeParam(res) {
+			if res.Params != "" && c.Config.Limits.NoParams && !mimeParam(res) {
 				c.reply("504 Command parameter not implemented")
 				c.replied = true
 				continue
@@ -1025,7 +1030,7 @@ func (c *Conn) Next() EventInfo {
 	// see it if they send anything more. It will also go in the
 	// SMTP command log.
 	evt.Arg = ""
-	if c.badcmds > c.cfg.Limits.BadCmds {
+	if c.badcmds > c.Config.Limits.BadCmds {
 		c.reply("554 Too many bad commands")
 		c.state = sAbort
 		evt.Arg = "too many bad commands"
@@ -1054,9 +1059,9 @@ func (c *Conn) authMechanisms() []string {
 	// I won't bother checking for nil Auth config here
 	// because this is only used when authentication is enabled.
 	if c.TLSOn {
-		return c.cfg.Auth.TLSMechanisms
+		return c.Config.Auth.TLSMechanisms
 	}
-	return c.cfg.Auth.Mechanisms
+	return c.Config.Auth.Mechanisms
 }
 
 func (c *Conn) authMechanismValid(mech string) bool {
@@ -1173,16 +1178,16 @@ func (c *Conn) Authenticate(mech AuthFunc) (success bool) {
 // connection. Further information is up to whatever is behind 'log'
 // to add.
 func NewConn(conn net.Conn, cfg Config, log io.Writer) *Conn {
-	c := &Conn{state: sStartup, cfg: cfg, logger: log}
+	c := &Conn{state: sStartup, Config: cfg, logger: log}
 	c.setupConn(conn)
-	if c.cfg.Limits == nil {
-		c.cfg.Limits = &DefaultLimits
+	if c.Config.Limits == nil {
+		c.Config.Limits = &DefaultLimits
 	}
-	if c.cfg.SftName == "" {
-		c.cfg.SftName = "go-smtpd"
+	if c.Config.SftName == "" {
+		c.Config.SftName = "go-smtpd"
 	}
-	if c.cfg.LocalName == "" {
-		c.cfg.LocalName = "localhost"
+	if c.Config.LocalName == "" {
+		c.Config.LocalName = "localhost"
 	}
 	return c
 }
