@@ -36,7 +36,8 @@ Smtpd supports PIPELINING by paying no attention to people who do it
 anyways and supports STARTTLS if you provide a certificate and a key.
 It advertises 8BITMIME and accepts the relevant MAIL FROM parameter;
 regardless of what clients do, messages are received in all 8 bits.
-It rejects VRFY and EXPN attempts.
+It rejects VRFY and EXPN attempts. It supports AUTH if you configure
+one or more authentication methods.
 
 References:
 	http://tools.ietf.org/html/rfc5321
@@ -49,3 +50,13 @@ Go-Guerilla SMTPd requires a real database server and is less RFC
 neurotic than smtpd (eg it assumes that clients always send commands in
 the right order). It's also a monolithic program instead of a package
 that you can reuse.
+
+CREDITS
+
+Chris Siebenmann https://github.com/siebenmann
+started writing this.
+
+Felix Lange https://github.com/fjl contributed SMTP AUTH support.
+
+COPYRIGHT:
+GPL v3 for now
