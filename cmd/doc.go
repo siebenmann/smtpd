@@ -261,11 +261,18 @@ temporary failure messages), or 'set-with' (which simply sets with
 options). The optional phase says that the rule should only be checked
 and take effect in that phase of the SMTP transaction and is one of:
 
-	@helo @from @to @data @message
+	@connect @helo @from @to @data @message
 
 @data is when the DATA command is received but before the sender has
 been authorized to send the message; @message is after the message has
-been received.
+been received. @connect is at initial connection, before the greeting
+banner has been sent or the client has sent any connections; it's
+currently most useful to selectively disable TLS for hosts that are
+known not to support it.
+
+(At the moment a 'stall' action at @connect time does nothing and a
+'reject' action causes the connection to be immediately dropped with
+no greeting banner.)
 
 There is also a compact form for checking multiple rule clauses (with
 optional with clauses) at once. This separates rule clauses and their
@@ -641,6 +648,13 @@ the rule matches. The following options are supported:
 		the supplied value for -d (if there is any). It's
 		valid to set savedir on a rule without a -d on the
 		command line.
+
+	tls-opt off|no-client
+		If set to 'off', disable TLS on this connection even if
+		it would normally be offered. If set to 'no-client',
+		do not do any verification of client TLS certificates
+		if offered.  tls-opt settings must be done before EHLO
+		is processed, in a rule that can act at @connect time.
 
 For example:
 

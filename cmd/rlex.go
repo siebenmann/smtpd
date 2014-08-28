@@ -81,6 +81,7 @@ const (
 	itemInclude
 
 	// phases
+	itemAConnect
 	itemAHelo
 	itemAFrom
 	itemATo
@@ -116,6 +117,7 @@ const (
 	itemMessage
 	itemNote
 	itemSavedir
+	itemTlsOpt
 
 	// options that do not duplicate keywords
 	itemEhlo
@@ -153,6 +155,7 @@ var keywords = map[string]itemType{
 	"include": itemInclude,
 
 	// phases
+	"@connect": itemAConnect,
 	"@helo":    itemAHelo,
 	"@from":    itemAFrom,
 	"@to":      itemATo,
@@ -188,6 +191,7 @@ var keywords = map[string]itemType{
 	"message": itemMessage,
 	"note":    itemNote,
 	"savedir": itemSavedir,
+	"tls-opt": itemTlsOpt,
 
 	// options
 	"ehlo":         itemEhlo,

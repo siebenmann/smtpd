@@ -29,7 +29,7 @@ reject helo-has \
 	ehlo,none dnsbl fred.jim
 reject ip 192.168.0.0/24 ip 127.0.0.2
 
-reject from bad with message from-bad
+reject from bad with message from-bad tls-opt off
 reject ehlo "fred jim"
 `
 

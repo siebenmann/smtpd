@@ -15,6 +15,7 @@ type Phase int
 
 const (
 	pAny Phase = iota
+	pConnect
 	pHelo
 	pMfrom
 	pRto
@@ -25,7 +26,8 @@ const (
 )
 
 var pMap = map[Phase]string{
-	pAny: "@any", pHelo: "@helo", pMfrom: "@from",
+	pAny: "@any", pConnect: "@connect",
+	pHelo: "@helo", pMfrom: "@from",
 	pRto: "@to", pData: "@data", pMessage: "@message",
 }
 

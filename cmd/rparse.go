@@ -9,7 +9,7 @@
 // rule    -> [phase] what andl [with] EOL|EOF
 // rclause -> andl [with] [rend rclause]
 // rend    -> ';' EOL | ';'
-// phase   -> @HELO | @FROM | @TO | @DATA | @MESSAGE
+// phase   -> @CONNECT | @HELO | @FROM | @TO | @DATA | @MESSAGE
 // what    -> ACCEPT | REJECT | STALL
 // andl    -> orl [andl]
 // orl     -> term [OR orl]
@@ -28,6 +28,7 @@
 // wterm   -> MESSAGE arg
 //            NOTE arg
 //            SAVEDIR arg
+//	      TLS-OPT OFF|NO-CLIENT
 // arg     -> VALUE
 //            FILENAME
 // arg actually is 'anything', keywords become values in it.
@@ -437,6 +438,15 @@ func (p *parser) pWClause(rc *RClause) (bool, error) {
 			}
 			p.consume()
 			arg, err = p.pArg()
+		case itemTlsOpt:
+			if _, ok := rc.withs[cv]; ok {
+				return gotone, p.posError(fmt.Sprintf("repeated '%s' option in with clause", cv))
+			}
+			p.consume()
+			arg, err = p.pArg()
+			if arg != "off" && arg != "no-client" {
+				return gotone, p.posError(fmt.Sprintf("illegal tls-opt option '%s' in with clause", arg))
+			}
 		default:
 			return gotone, nil
 		}
@@ -470,7 +480,8 @@ func (p *parser) pWith(rc *RClause) error {
 
 // parse: [phase]
 var phases = map[itemType]Phase{
-	itemAHelo: pHelo, itemAFrom: pMfrom, itemATo: pRto, itemAData: pData,
+	itemAConnect: pConnect,
+	itemAHelo:    pHelo, itemAFrom: pMfrom, itemATo: pRto, itemAData: pData,
 	itemAMessage: pMessage,
 }
 

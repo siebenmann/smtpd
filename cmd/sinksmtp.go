@@ -565,8 +565,24 @@ func decider(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id st
 	if note := c.withprops["note"]; note != "" {
 		c.trans.log.Write([]byte(fmt.Sprintf("! rule note: %s\n", note)))
 	}
+	// Disable TLS if desired, or just disable asking for client certs.
+	switch c.withprops["tls-opt"] {
+	case "off":
+		convo.Config.TLSConfig = nil
+	case "no-client":
+		convo.Config.TLSConfig.ClientAuth = tls.NoClientCert
+	}
+
 	if res == aNoresult || res == aAccept {
 		return false
+	}
+
+	if ph == pConnect {
+		// TODO: have some way to stall or reject connections
+		// in smtpd. Or should that be handled outside of it?
+		// Right now a reject result means 'drop', stall will
+		// implicitly cause us to go on.
+		return res == aReject
 	}
 
 	msg := c.withprops["message"]
@@ -715,7 +731,14 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	if len(certs) > 0 && !(blocktls && blcount >= 2) {
 		var tlsc tls.Config
 		tlsc.Certificates = certs
-		tlsc.ClientAuth = tls.VerifyClientCertIfGiven
+		// if there is already one TLS failure for this host,
+		// it might be because of a bad client certificate.
+		// so on the second time around we don't ask for one.
+		// (More precisely we only ask for a client cert if
+		// there are no failures so far.)
+		if blcount == 0 {
+			tlsc.ClientAuth = tls.VerifyClientCertIfGiven
+		}
 		tlsc.SessionTicketsDisabled = true
 		tlsc.ServerName = sname
 		tlsc.BuildNameToCertificate()
@@ -729,6 +752,19 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	// thus can pause a bit here. Clients will cope, or at least we
 	// don't care if impatient ones don't.
 	trans.rdns, _ = LookupAddrVerified(trans.rip)
+
+	// Check for an immediate result on the initial connection. This
+	// may disable TLS or refuse things immediately.
+	if decider(pConnect, evt, c, convo, "") {
+		// TODO: somehow write a message and maybe log it.
+		// this probably needs smtpd.go cooperation.
+		// Right now we just close abruptly.
+		if smtplog != nil && !stall {
+			s := fmt.Sprintf("! %s dropped on connect due to rule at %s\n", trans.rip, time.Now().Format(smtpd.TimeFmt))
+			logger.Write([]byte(s))
+		}
+		return
+	}
 
 	// Main transaction loop. We gather up email messages as they come
 	// in, possibly failing various operations as we're told to.

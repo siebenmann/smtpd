@@ -32,6 +32,8 @@ reject ip 85.90.187.32/27 or host .edmpoint.com or ehlo .edmpoint.com
 reject dnsbl sbl.spamhaus.org with message "listed in the SBL" \
 		savedir jim note barney
 set-with all with note "I am here"
+@connect set-with ip 100.100.100.100 with tls-opt off
+@connect set-with ip 100.200.200.100 with tls-opt no-client
 
 # oh boy
 set-with ip 127.0.0.1 with note a; all with note b;
@@ -336,6 +338,8 @@ set-with all
 set-with all with note a;
 set-with all with ;
 set-with all with note a; all
+set-with all with tls-opt yes
+set-with all with tls-opt
 @from accept to @fbi.gov`
 
 func TestNotParse(t *testing.T) {
@@ -371,10 +375,11 @@ func TestDnsblHit(t *testing.T) {
 // Test 'with' option setting, both for set-with and for the actual matching
 // rule (which should override a set-with value).
 var aWiths = `set-with all with message fred note joe
-accept all with savedir bob note jim
+accept all with savedir bob note jim tls-opt off
 `
 var resVals = []struct{ k, v string }{
 	{"message", "fred"}, {"savedir", "bob"}, {"note", "jim"},
+	{"tls-opt", "off"},
 }
 
 func TestWithSetting(t *testing.T) {
