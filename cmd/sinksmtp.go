@@ -570,7 +570,11 @@ func decider(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id st
 	case "off":
 		convo.Config.TLSConfig = nil
 	case "no-client":
-		convo.Config.TLSConfig.ClientAuth = tls.NoClientCert
+		// 'tls-opt no-client' without certificates should not
+		// crash.
+		if convo.Config.TLSConfig != nil {
+			convo.Config.TLSConfig.ClientAuth = tls.NoClientCert
+		}
 	}
 
 	if res == aNoresult || res == aAccept {
