@@ -14,8 +14,8 @@ smtpd comes with a 'sinkhole' SMTP server that simply takes in email
 (perhaps) and doesn't do anything with it beyond perhaps writing it to
 disk. This is obviously not suitable for production usage but it does
 make a potentially useful sink for spammers (which is what the author
-uses it for). This is cmd/sinkhole.go; see the comments at the start
-for how to run it.
+uses it for). This is cmd/sinksmtp.go; see the comments at the start
+and also cmd/doc.go for how to run it.
 
 Because of its origin as the core engine of a sinkhole SMTP server,
 smtpd is pretty casual about a lot of things in the SMTP protocol
