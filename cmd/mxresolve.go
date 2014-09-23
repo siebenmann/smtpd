@@ -17,11 +17,12 @@ import (
 
 type dnsResult int
 
+// note that we must be in order from bad to good results here.
 const (
 	dnsUndef dnsResult = iota
-	dnsGood
 	dnsBad
 	dnsTempfail
+	dnsGood
 )
 
 func (d dnsResult) String() string {
@@ -98,11 +99,10 @@ func checkIP(domain string) (dnsResult, error) {
 	return dnsGood, nil
 }
 
-// ValidDomain returns whether or not the domain or host name exists in
-// DNS as a valid target for mail. Unfortunately the Go net.Lookup*
-// functions do not currently return useful Temporary() results for DNS
-// server 'temporary failure' indications, so we can only give you yes/no
-// results instead of a trinary yes / no / try-later indicator.
+// ValidDomain returns whether or not the domain or host name exists
+// in DNS as a valid target for mail. We use a gory hack to try to
+// determine if any error was a temporary failure, in which case we
+// return an indicator of this.
 //
 // The presence of any MX entry of '.' or 'localhost.' is taken as an
 // indicator that this domain is not a valid mail delivery
@@ -127,8 +127,10 @@ func ValidDomain(domain string) (dnsResult, error) {
 	// valid the moment any one of them is; however, we can't short
 	// circuit the check because we want to continue to check for
 	// '.' et al in all MXes, even high preference ones.
-	valid := dnsBad
 	var verr error
+	valid := dnsUndef // we start with no DNS results at all.
+	// We assume that there is at least one MX entry since LookupMX()
+	// returned without error. This may be a bad idea but we'll see.
 	for _, m := range mxs {
 		lc := strings.ToLower(m.Host)
 		// Any MX entry of '.' or 'localhost.' means that this is
@@ -137,15 +139,18 @@ func ValidDomain(domain string) (dnsResult, error) {
 		if lc == "." || lc == "localhost." {
 			return dnsBad, fmt.Errorf("rejecting bogus MX %s", m.Host)
 		}
+		// TODO: immediately fail anyone who MXs to an IP address?
 
 		v, err := checkIP(m.Host)
-		if v == dnsTempfail {
+		// Replace worse results with better results as we get
+		// them; dnsGod > dnsTempfail > dnsBad. With the
+		// better results, we also save the error. This means
+		// that the error set is the error for the first host
+		// with our best result, if there are eg multiple bad
+		// MX entries.
+		if v > valid {
 			valid = v
 			verr = err
-		}
-		if valid == dnsBad && v == dnsGood {
-			valid = dnsGood
-			verr = nil
 		}
 	}
 	return valid, verr
