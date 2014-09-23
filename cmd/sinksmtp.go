@@ -303,8 +303,9 @@ type smtpTransaction struct {
 	servername string
 
 	// Make our logger accessible in decider() as a hack.
-	log     *smtpLogger
-	lastmsg string
+	log      *smtpLogger
+	lastmsg  string
+	lastamsg string
 }
 
 // returns overall hash and body-of-message hash. The latter may not
@@ -553,6 +554,14 @@ func decider(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id st
 	res := Decide(ph, evt, c)
 
 	logDnsbls(c)
+	// Terrible hack to log DNS lookup failure specifics.
+	if c.domerr != nil && c.trans.log != nil {
+		lmsg := fmt.Sprintf("! %s\n", c.domerr)
+		if lmsg != c.trans.lastamsg {
+			c.trans.log.Write([]byte(lmsg))
+			c.trans.lastamsg = lmsg
+		}
+	}
 	// The moment a rule sets a savedir, it becomes sticky.
 	// This lets you select a savedir based on eg from matching
 	// instead of having to do games later.

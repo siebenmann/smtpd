@@ -6,11 +6,17 @@
 package main
 
 import (
-	//"fmt"
+	"fmt"
 	"github.com/siebenmann/smtpd"
 	"net"
 	"strings"
 )
+
+// DNSResult encapsulates the DNS result and any error. This is a hack.
+type DNSResult struct {
+	d dnsResult
+	e error
+}
 
 // Context is the context for all rule evaluation. All expressions take
 // a context structure and operate on the data found in it.
@@ -55,7 +61,9 @@ type Context struct {
 	dnsblhit []string
 
 	// Domain lookup results
-	domvalid map[string]*dnsResult
+	domvalid map[string]*DNSResult
+	// nnngh.
+	domerr error
 
 	// we should tempfail for internal reasons, eg tempfail on file
 	// read
@@ -99,24 +107,26 @@ func (c *Context) addDnsblHit(domain string) {
 	c.dnsblhit = append(c.dnsblhit, domain)
 }
 
-func (c *Context) validDomain(domain string) dnsResult {
+var nilBad = DNSResult{d: dnsBad, e: fmt.Errorf("nil result")}
+
+func (c *Context) validDomain(domain string) DNSResult {
 	if c.domvalid == nil {
 		// hack for testing.
-		return dnsBad
+		return nilBad
 	}
 	if c.domvalid[domain] != nil {
 		return *c.domvalid[domain]
 	}
-	t := ValidDomain(domain)
-	c.domvalid[domain] = &t
-	return t
+	t, err := ValidDomain(domain)
+	c.domvalid[domain] = &DNSResult{d: t, e: err}
+	return *c.domvalid[domain]
 }
 
 func newContext(trans *smtpTransaction, rules []*Rule) *Context {
 	c := &Context{trans: trans, ruleset: rules}
 	c.files = make(map[string][]string)
 	c.dnsbl = make(map[string]*Result)
-	c.domvalid = make(map[string]*dnsResult)
+	c.domvalid = make(map[string]*DNSResult)
 	return c
 }
 
@@ -251,14 +261,17 @@ func getAddrOpts(a string, c *Context) (o Option) {
 	}
 
 	if o&(oNoat|oUnqualified|oGarbage|oRoute) == 0 {
-		valid := c.validDomain(a[idx+1:])
-		switch valid {
+		dom := a[idx+1:]
+		valid := c.validDomain(dom)
+		switch valid.d {
 		case dnsGood:
 			o |= oDomainValid
 		case dnsBad:
 			o |= oDomainInvalid
+			c.domerr = fmt.Errorf("domain %s: %s", dom, valid.e)
 		case dnsTempfail:
 			o |= oDomainTempfail
+			c.domerr = fmt.Errorf("domain %s: %s", dom, valid.e)
 		}
 	}
 	return
@@ -415,6 +428,7 @@ func Decide(ph Phase, evt smtpd.EventInfo, c *Context) Action {
 	ret = aNoresult
 	c.dnsblhit = []string{}
 	c.withprops = make(map[string]string)
+	c.domerr = nil
 
 	// Handle deferred results due to MAIL FROM:<>.
 	// We replace the determined result regardless of what it is,

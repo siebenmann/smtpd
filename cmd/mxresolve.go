@@ -73,29 +73,29 @@ var _, ipv6siteloc, _ = net.ParseCIDR("FEC0::/10")
 // A valid mail delivery target must have at least one IP address and
 // all of its IP addresses must be global unicast IP addresses (not
 // localhost IPs, not multicast, etc).
-func checkIP(domain string) dnsResult {
+func checkIP(domain string) (dnsResult, error) {
 	addrs, err := net.LookupIP(domain)
 	if err != nil && isTemporary(err) {
-		return dnsTempfail
+		return dnsTempfail, err
 	}
 	if err != nil {
-		return dnsBad
+		return dnsBad, err
 	}
 	if len(addrs) == 0 {
-		return dnsBad
+		return dnsBad, fmt.Errorf("%s: no IPs", domain)
 	}
 	// We disqualify any name that has an IP address that is not a global
 	// unicast address.
 	for _, i := range addrs {
 		if !i.IsGlobalUnicast() {
-			return dnsBad
+			return dnsBad, fmt.Errorf("host %s IP %s not global unicast", domain, i)
 		}
 		// Disallow RFC1918 address space too.
 		if net10.Contains(i) || net172.Contains(i) || net192.Contains(i) || ipv6private.Contains(i) || ipv6siteloc.Contains(i) {
-			return dnsBad
+			return dnsBad, fmt.Errorf("host %s IP %s is in bad address space", domain, i)
 		}
 	}
-	return dnsGood
+	return dnsGood, nil
 }
 
 // ValidDomain returns whether or not the domain or host name exists in
@@ -113,10 +113,10 @@ func checkIP(domain string) dnsResult {
 //
 // Note: RFC1918 addresses et al are not considered 'global' addresses
 // by us. This may be arguable.
-func ValidDomain(domain string) dnsResult {
+func ValidDomain(domain string) (dnsResult, error) {
 	mxs, err := net.LookupMX(domain + ".")
 	if err != nil && isTemporary(err) {
-		return dnsTempfail
+		return dnsTempfail, fmt.Errorf("MX tempfail: %s", err)
 	}
 	// No MX entry? Fall back to A record lookup.
 	if err != nil {
@@ -128,22 +128,25 @@ func ValidDomain(domain string) dnsResult {
 	// circuit the check because we want to continue to check for
 	// '.' et al in all MXes, even high preference ones.
 	valid := dnsBad
+	var verr error
 	for _, m := range mxs {
 		lc := strings.ToLower(m.Host)
 		// Any MX entry of '.' or 'localhost.' means that this is
 		// not a valid target; they've said 'do not send us email'.
 		// *ANY* MX entry set this way will disqualify a host.
 		if lc == "." || lc == "localhost." {
-			return dnsBad
+			return dnsBad, fmt.Errorf("rejecting bogus MX %s", m.Host)
 		}
 
-		v := checkIP(m.Host)
+		v, err := checkIP(m.Host)
 		if v == dnsTempfail {
 			valid = v
+			verr = err
 		}
 		if valid == dnsBad && v == dnsGood {
 			valid = dnsGood
+			verr = nil
 		}
 	}
-	return valid
+	return valid, verr
 }
