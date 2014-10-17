@@ -10,7 +10,6 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
-	"github.com/siebenmann/smtpd"
 	"io"
 	"io/ioutil"
 	"net"
@@ -23,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/siebenmann/smtpd"
 )
 
 // Our message/logging time format is time without the timezone.
@@ -749,8 +750,11 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 		// so on the second time around we don't ask for one.
 		// (More precisely we only ask for a client cert if
 		// there are no failures so far.)
+		// We also force a minimum of TLS1.0 on the first
+		// connection.
 		if blcount == 0 {
 			tlsc.ClientAuth = tls.VerifyClientCertIfGiven
+			tlsc.MinVersion = tls.VersionTLS10
 		}
 		tlsc.SessionTicketsDisabled = true
 		tlsc.ServerName = sname
