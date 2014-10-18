@@ -946,7 +946,11 @@ func (c *Conn) Next() EventInfo {
 				c.setupConn(tlsConn)
 				c.TLSOn = true
 				c.TLSState = tlsConn.ConnectionState()
-				c.log("!", "TLS negociated with cipher 0x%04x server name '%s'", c.TLSState.CipherSuite, c.TLSState.ServerName)
+				if c.TLSState.ServerName != "" {
+					c.log("!", "TLS negociated with cipher 0x%04x protocol 0x%04x server name '%s'", c.TLSState.CipherSuite, c.TLSState.Version, c.TLSState.ServerName)
+				} else {
+					c.log("!", "TLS negociated with cipher 0x%04x protocol 0x%04x", c.TLSState.CipherSuite, c.TLSState.Version)
+				}
 				// By the STARTTLS RFC, we return to our state
 				// immediately after the greeting banner
 				// and clients must re-EHLO.
