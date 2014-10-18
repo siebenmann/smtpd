@@ -301,6 +301,7 @@ type smtpTransaction struct {
 	// tlson true over time. cipher is valid only if tlson is true.
 	tlson      bool
 	cipher     uint16
+	tlsversion uint16
 	servername string
 
 	// Make our logger accessible in decider() as a hack.
@@ -345,6 +346,22 @@ func writeDNSList(writer io.Writer, pref string, dlist []string) {
 	fmt.Fprintf(writer, "\n")
 }
 
+func tlsProtoVersion(ver uint16) string {
+	switch ver {
+	case tls.VersionSSL30:
+		return "SSLv3"
+	case tls.VersionTLS10:
+		return "TLSv1.0"
+	case tls.VersionTLS11:
+		return "TLSv1.1"
+	case tls.VersionTLS12:
+		return "TLSv1.2"
+	default:
+		return fmt.Sprintf("tls-0x%04x", ver)
+
+	}
+}
+
 // return a block of bytes that records the message details,
 // including the actual message itself. We also return a hash of what
 // we consider the constant data about this message, which included
@@ -370,6 +387,7 @@ func msgDetails(prefix string, trans *smtpTransaction) ([]byte, string) {
 		if cn := cipherNames[trans.cipher]; cn != "" {
 			fmt.Fprintf(writer, " name %s", cn)
 		}
+		fmt.Fprintf(writer, " proto %s", tlsProtoVersion(trans.tlsversion))
 		if trans.servername != "" {
 			fmt.Fprintf(writer, " server-name '%s'", trans.servername)
 		}
@@ -409,7 +427,7 @@ func logMessage(prefix string, trans *smtpTransaction, logf io.Writer) {
 		len(trans.data), trans.hash, trans.bodyhash, trans.laddr,
 		trans.heloname)
 	if trans.tlson {
-		fmt.Fprintf(writer, " tls:cipher 0x%04x", trans.cipher)
+		fmt.Fprintf(writer, " tls:cipher 0x%04x tls:proto 0x%04x", trans.cipher, trans.tlsversion)
 	}
 	fmt.Fprintf(writer, "\n")
 	writer.Flush()
@@ -750,11 +768,12 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 		// so on the second time around we don't ask for one.
 		// (More precisely we only ask for a client cert if
 		// there are no failures so far.)
-		// We also force a minimum of TLS1.0 on the first
-		// connection.
+		// Another reason for failure here is a SSLv3 only
+		// host without a client certificate. This produces
+		// the error:
+		// tls: received unexpected handshake message of type *tls.clientKeyExchangeMsg when waiting for *tls.certificateMsg
 		if blcount == 0 {
 			tlsc.ClientAuth = tls.VerifyClientCertIfGiven
-			tlsc.MinVersion = tls.VersionTLS10
 		}
 		tlsc.SessionTicketsDisabled = true
 		tlsc.ServerName = sname
@@ -846,6 +865,7 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 			trans.tlson = convo.TLSOn
 			trans.cipher = convo.TLSState.CipherSuite
 			trans.servername = convo.TLSState.ServerName
+			trans.tlsversion = convo.TLSState.Version
 			trans.hash, trans.bodyhash = getHashes(trans)
 			transid, err := handleMessage(prefix, trans, logf)
 			// errors when handling a message always force
