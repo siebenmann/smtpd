@@ -772,9 +772,12 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 		// host without a client certificate. This produces
 		// the error:
 		// tls: received unexpected handshake message of type *tls.clientKeyExchangeMsg when waiting for *tls.certificateMsg
-		if blcount == 0 {
-			tlsc.ClientAuth = tls.VerifyClientCertIfGiven
-		}
+		//if blcount == 0 {
+		//	tlsc.ClientAuth = tls.VerifyClientCertIfGiven
+		//}
+		// Now generally disabled since I discovered it causes
+		// SSLv3 handshakes to always fail. TODO: better fix with
+		// config-file control or something.
 		tlsc.SessionTicketsDisabled = true
 		tlsc.ServerName = sname
 		tlsc.BuildNameToCertificate()
