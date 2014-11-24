@@ -111,6 +111,7 @@ const (
 	itemDns
 	itemIp
 	itemDnsbl
+	itemSource
 
 	// add-ons
 	itemWith
@@ -185,6 +186,7 @@ var keywords = map[string]itemType{
 	"dns":      itemDns,
 	"ip":       itemIp,
 	"dnsbl":    itemDnsbl,
+	"source":   itemSource,
 
 	// add-ons
 	"with":    itemWith,

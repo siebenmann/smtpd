@@ -23,6 +23,7 @@
 //            FROM|TO|HELO|HOST arg
 //            IP IPADDR|CIDR|FILENAME
 //            DNSBL DOMAIN
+//            SOURCE arg
 // with    -> WITH clause
 // wclause -> wterm [wclause]
 // wterm   -> MESSAGE arg
@@ -218,6 +219,7 @@ func (p *parser) pOnOff() (on bool, err error) {
 var minReq = map[itemType]Phase{
 	itemFrom: pMfrom, itemHelo: pHelo, itemEhlo: pHelo, itemTo: pRto,
 	itemFromHas: pMfrom, itemToHas: pRto, itemHeloHas: pHelo,
+	itemSource: pMfrom,
 	// We can't be sure that TLS is set up until we've seen a
 	// MAIL FROM, because the first HELO/EHLO will be without
 	// TLS and then they will STARTTLS again.
@@ -295,7 +297,7 @@ func (p *parser) pTerm() (expr Expr, err error) {
 	var ison bool
 	var opts Option
 	switch ct {
-	case itemFrom, itemTo, itemHelo, itemEhlo, itemHost:
+	case itemFrom, itemTo, itemHelo, itemEhlo, itemHost, itemSource:
 		p.consume()
 		arg, err = p.pArg()
 	case itemIp:
@@ -336,6 +338,8 @@ func (p *parser) pTerm() (expr Expr, err error) {
 		return newHeloNode(arg), nil
 	case itemHost:
 		return newHostNode(arg), nil
+	case itemSource:
+		return newSourceNode(arg), nil
 	case itemIp:
 		return newIPNode(arg), nil
 	case itemDnsbl:

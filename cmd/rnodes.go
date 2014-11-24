@@ -380,6 +380,30 @@ func newIPNode(arg string) Expr {
 	}
 }
 
+// A Source matches host arg, ehlo arg, or from @<arg>.
+// We do so by literally storing nodes internally. We could do this as
+// a literal Or node, but we prefer slightly more structure here.
+type matchSource struct {
+	arg              string
+	host, ehlo, from Expr
+}
+
+func (m *matchSource) String() string {
+	return fmt.Sprintf("source %s", m.arg)
+}
+func (m *matchSource) Eval(c *Context) Result {
+	return m.host.Eval(c) || m.ehlo.Eval(c) || m.from.Eval(c)
+}
+
+func newSourceNode(arg string) Expr {
+	return &matchSource{
+		arg:  arg,
+		host: newHostNode(arg),
+		ehlo: newHeloNode(arg),
+		from: newFromNode("@" + arg),
+	}
+}
+
 // ------
 
 // OptionN is the general matcher for options.

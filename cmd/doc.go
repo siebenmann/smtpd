@@ -443,6 +443,12 @@ described later.
 			against each of them and 'host' succeeds
 			if any match.
 
+ source HPAT		This is equivalent to '(host HPAT or ehlo HPAT
+			or from @HPAT)'. It matches if the verified
+			hostname is HPAT, if the client's EHLO/HELO
+			gave that name, or if the MAIL FROM domain
+			matches HPAT.
+
  ip IP|CIDR|FILENAME	match the remote IP against the given IP
 			address or CIDR netblock. If given a
 			filename, we read IP addresses and CIDR

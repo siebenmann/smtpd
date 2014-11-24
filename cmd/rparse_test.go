@@ -34,6 +34,7 @@ reject dnsbl sbl.spamhaus.org with message "listed in the SBL" \
 set-with all with note "I am here"
 @connect set-with ip 100.100.100.100 with tls-opt off
 @connect set-with ip 100.200.200.100 with tls-opt no-client
+reject source fred.com
 
 # oh boy
 set-with ip 127.0.0.1 with note a; all with note b;
@@ -180,6 +181,11 @@ accept host .f
 # IP tests
 accept ip 192.168.10.3 ip 192.168.10.0/24 ip /ips ip 192.168.010.003
 accept not ip 127.0.0.10
+# source tests
+accept source .f
+accept source .ben
+accept source jones.com
+accept not source example.com
 `
 
 // Verify that all rules in allSuccess do succeed.
@@ -310,6 +316,7 @@ accept fred
 accept host jones or
 accept (host jones or)
 accept host jones or barney
+accept source
 accept
 accept not
 accept not fred
