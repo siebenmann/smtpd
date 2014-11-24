@@ -395,12 +395,28 @@ func (m *matchSource) Eval(c *Context) Result {
 	return m.host.Eval(c) || m.ehlo.Eval(c) || m.from.Eval(c)
 }
 
+// Match the host(name) of the domain of (from) addresses. We glue
+// '@' on front of the host to match against and call matchAddress().
+// This is kind of inefficient but that's how it goes.
+func matchFromHost(addr string, host string) bool {
+	return matchAddress(addr, "@"+host)
+}
+
 func newSourceNode(arg string) Expr {
 	return &matchSource{
 		arg:  arg,
 		host: newHostNode(arg),
 		ehlo: newHeloNode(arg),
-		from: newFromNode("@" + arg),
+		// We must use our own matcher in order to preserve the
+		// ability to do 'source /some/file', because in that case
+		// we can't just glue a '@' on front of the arg here and be
+		// done.
+		from: &MatchN{what: "source_from", arg: arg,
+			matcher: matchFromHost,
+			getter: func(c *Context) []string {
+				return []string{c.from}
+			},
+		},
 	}
 }
 

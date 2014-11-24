@@ -7,9 +7,10 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"github.com/siebenmann/smtpd"
 	"strings"
 	"testing"
+
+	"github.com/siebenmann/smtpd"
 )
 
 // all of these rules should parse
@@ -88,6 +89,10 @@ postmaster@Example.Org
 # t
 `
 
+var aSource = `# This will become /a/file2
+.jones.com
+`
+
 // ipList will become the synthetic file '/ips'
 var ipList = `
 127.0.0.0/8
@@ -144,6 +149,10 @@ func setupContext(t *testing.T) *Context {
 		t.Fatalf("Error during iplist read: %v", err)
 	}
 	c.files["/empty"] = []string{}
+	err = setupFile(c, "/a/file2", aSource)
+	if err != nil {
+		t.Fatalf("Error during aSource read: %v", err)
+	}
 	return c
 }
 
@@ -185,6 +194,7 @@ accept not ip 127.0.0.10
 accept source .f
 accept source .ben
 accept source jones.com
+accept source /a/file2
 accept not source example.com
 `
 
