@@ -971,6 +971,11 @@ func (c *Conn) Next() EventInfo {
 			if c.Config.Auth == nil {
 				c.reply("502 Not supported")
 				c.replied = true
+				// AUTH with no AUTH enabled counts as a
+				// bad command. This deals with a few people
+				// who spam AUTH requests at non-supporting
+				// servers.
+				c.badcmds++
 				continue
 			}
 			if c.authenticated {
