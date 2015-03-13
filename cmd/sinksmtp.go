@@ -1060,6 +1060,10 @@ Quick notes:
 -helo's default value is either the hostname of the IP of the local
 IP for the connection or 'IP:port' if the IP has no hostname.
 
+-c/-k can be given a comma-separated list of certificate and key
+files; sinksmtp uses standard Go SNI matching to pick which one to
+offer (defaulting to the first).
+
 The rejection from -M is applied after -d and/or -l, so a received
 email will be saved and/or have its details logged before being
 5xx'd to the client.
@@ -1090,24 +1094,24 @@ func main() {
 	// TODO: group these better. Handle these better? Something.
 	flag.BoolVar(&failgotdata, "M", false, "reject all messages after they're fully received")
 	flag.BoolVar(&goslow, "S", false, "send output to the network slowly (10 characters/sec)")
-	flag.StringVar(&srvname, "helo", "", "server name for greeting banners")
-	flag.StringVar(&smtplogfile, "smtplog", "", "log all SMTP conversations to here, '-' for stdout")
-	flag.StringVar(&logfile, "l", "", "log summary info about received email to here, '-' for stdout")
-	flag.StringVar(&savedir, "d", "", "directory to save received messages in")
+	flag.StringVar(&srvname, "helo", "", "server `hostname` for greeting banners")
+	flag.StringVar(&smtplogfile, "smtplog", "", "log all SMTP conversations to `file`, '-' for stdout")
+	flag.StringVar(&logfile, "l", "", "log summary info about received email to `file`, '-' for stdout")
+	flag.StringVar(&savedir, "d", "", "`directory` to save received messages in")
 	flag.BoolVar(&force, "force-receive", false, "force accepting email even without a -d directory")
-	flag.StringVar(&hashtype, "save-hash", "all", "what to base the hash name of saved messages on")
-	flag.StringVar(&certfile, "c", "", "TLS PEM certificate file; requires -k too")
-	flag.StringVar(&keyfile, "k", "", "TLS PEM key file; requires -c too")
-	flag.StringVar(&fromreject, "fromreject", "", "file of address patterns to reject in MAIL FROMs")
-	flag.StringVar(&toaccept, "toaccept", "", "file of address patterns to accept in RCPT TOs")
-	flag.StringVar(&heloreject, "heloreject", "", "file of hostname patterns to reject in EHLOs")
-	flag.StringVar(&rfiles, "r", "", "comma separated list of files of control rules")
-	flag.IntVar(&yakCount, "dncount", 0, "stall & don't log do-nothing clients after this many connections")
-	flag.DurationVar(&yakTimeout, "dndur", time.Hour*8, "default do-nothing client timeout period and time window")
-	flag.StringVar(&minphase, "minphase", "helo", "minimum successful phase to not be a do-nothing client")
+	flag.StringVar(&hashtype, "save-hash", "all", "`what` to base the hash name of saved messages on")
+	flag.StringVar(&certfile, "c", "", "TLS PEM certificate `file`; requires -k too")
+	flag.StringVar(&keyfile, "k", "", "TLS PEM key `file`; requires -c too")
+	flag.StringVar(&fromreject, "fromreject", "", "`file` of address patterns to reject in MAIL FROMs")
+	flag.StringVar(&toaccept, "toaccept", "", "`file` of address patterns to accept in RCPT TOs")
+	flag.StringVar(&heloreject, "heloreject", "", "`file` of hostname patterns to reject in EHLOs")
+	flag.StringVar(&rfiles, "r", "", "comma separated list of `files` of control rules")
+	flag.IntVar(&yakCount, "dncount", 0, "stall & don't log do-nothing clients after this many `connections`")
+	flag.DurationVar(&yakTimeout, "dndur", time.Hour*8, "default do-nothing client timeout period & time window")
+	flag.StringVar(&minphase, "minphase", "helo", "minimum successful `phase` to not be a do-nothing client")
 	flag.BoolVar(&nostdrules, "nostdrules", false, "do not use standard basic rules")
-	flag.StringVar(&pprofserv, "pprof", "", "host:port for net/http/pprof performance monitoring server")
-	flag.StringVar(&connfile, "conncfg", "", "filename of per-connection parameters")
+	flag.StringVar(&pprofserv, "pprof", "", "`host:port` for net/http/pprof performance monitoring server")
+	flag.StringVar(&connfile, "conncfg", "", "`file` of per-connection parameters")
 
 	flag.Usage = usage
 
