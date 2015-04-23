@@ -203,10 +203,11 @@ var yakkers = &ipMap{ips: make(map[string]*ipEnt)}
 
 // We must take a TTL because we want to annul the count of existing
 // but stale entries. Right now this only matters for yakkers, which
-// is the only thing that cares about counts.
-func (i *ipMap) Add(ip string, ttl time.Duration) {
+// is the only thing that cares about counts. Add() returns the count
+// because that turns out to be convenient.
+func (i *ipMap) Add(ip string, ttl time.Duration) int {
 	if ip == "" {
-		return
+		return 0
 	}
 	i.Lock()
 	t := i.ips[ip]
@@ -219,7 +220,9 @@ func (i *ipMap) Add(ip string, ttl time.Duration) {
 	}
 	t.count++
 	t.when = time.Now()
+	cnt := t.count
 	i.Unlock()
+	return cnt
 }
 
 func (i *ipMap) Del(ip string) {
@@ -653,6 +656,14 @@ func decider(ph Phase, evt smtpd.EventInfo, c *Context, convo *smtpd.Conn, id st
 	return true
 }
 
+func writeLog(logger *smtpLogger, format string, elems ...interface{}) {
+	if logger == nil {
+		return
+	}
+	s := fmt.Sprintf(format, elems...)
+	logger.Write([]byte(s))
+}
+
 // Process a single connection.
 func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtplog io.Writer, baserules []*Rule) {
 	var evt smtpd.EventInfo
@@ -798,9 +809,8 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 		// TODO: somehow write a message and maybe log it.
 		// this probably needs smtpd.go cooperation.
 		// Right now we just close abruptly.
-		if smtplog != nil && !stall {
-			s := fmt.Sprintf("! %s dropped on connect due to rule at %s\n", trans.rip, time.Now().Format(smtpd.TimeFmt))
-			logger.Write([]byte(s))
+		if !stall {
+			writeLog(logger, "! %s dropped on connect due to rule at %s\n", trans.rip, time.Now().Format(smtpd.TimeFmt))
 		}
 		return
 	}
@@ -828,6 +838,24 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 			case smtpd.MAILFROM:
 				if decider(pMfrom, evt, c, convo, "") {
 					continue
+				}
+				if trans.from != "" && !gotsomewhere && sesscounts {
+					// We've been RSET, which potentially
+					// counts as a failure for do-nothing
+					// client detection. Note that we are
+					// implicitly adding the *last* failed
+					// attempt, the one that was RSET from.
+					cnt = yakkers.Add(trans.rip, yakTimeout)
+					// We're slightly generous with RSETs.
+					// This has no net effect unless this
+					// final attempt succeeds.
+					if cnt > yakCount {
+						writeLog(logger, "! %s added as a yakker at hit %d due to RSET\n", trans.rip, cnt)
+						convo.TempfailMsg("Too many unsuccessful delivery attempts")
+						// this will implicitly close
+						// the connection.
+						return
+					}
 				}
 				trans.from = evt.Arg
 				trans.data = ""
@@ -903,14 +931,12 @@ func process(cid int, nc net.Conn, certs []tls.Certificate, logf io.Writer, smtp
 	// And we have to have good rules to start with because duh.
 	switch {
 	case !gotsomewhere && sesscounts:
-		yakkers.Add(trans.rip, yakTimeout)
+		cnt = yakkers.Add(trans.rip, yakTimeout)
 		// See if this transaction has pushed the client over the
 		// edge to becoming a yakker. If so, report it to the SMTP
 		// log.
-		hit, cnt = yakkers.Lookup(trans.rip, yakTimeout)
-		if hit && cnt >= yakCount && smtplog != nil {
-			s := fmt.Sprintf("! %s added as a yakker at hit %d\n", trans.rip, cnt)
-			logger.Write([]byte(s))
+		if cnt >= yakCount {
+			writeLog(logger, "! %s added as a yakker at hit %d\n", trans.rip, cnt)
 		}
 	case yakCount > 0 && gotsomewhere:
 		yakkers.Del(trans.rip)
