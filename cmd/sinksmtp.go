@@ -1135,10 +1135,10 @@ func main() {
 		die("bad option for -save-hash: '%s'. Only msg, full, and all are valid.\n", hashtype)
 	}
 	if yakCount > 0 && smtplogfile == "" {
-		die("-dncount requires -smtplog")
+		die("-dncount requires -smtplog\n")
 	}
 	if yakCount > 0 && yakTimeout < time.Second {
-		die("-dndur is too small; must be at least one second")
+		die("-dndur is too small; must be at least one second\n")
 	}
 
 	switch {
