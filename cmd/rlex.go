@@ -318,12 +318,24 @@ func (l *lexer) run() {
 	for l.state = lexLineStart; l.state != nil; {
 		l.state = l.state(l)
 	}
+	close(l.items)
 }
 
-// get the next token from the lexer channel
+// get the next token from the lexer channel.
+// called by the parser, not in the lexing goroutine.
 func (l *lexer) nextItem() item {
 	item := <-l.items
 	return item
+}
+
+// drain drains the output of the lexer so that the lexing goroutine will
+// exit. Called by the parser, not in the lexing goroutine.
+func (l *lexer) drain() {
+	if l == nil {
+		return
+	}
+	for range l.items {
+	}
 }
 
 // returns the line number and the byte position within the line,

@@ -368,6 +368,25 @@ func TestNotParse(t *testing.T) {
 	}
 }
 
+// Test that we don't have a lexer goroutine sitting around after we're
+// done. This requires manual fiddling; we hand-construct the parser,
+// call p.pFile(), and then manually drain.
+// TODO: make less ugly.
+func TestNoLexerGoroutine(t *testing.T) {
+	l := lex(notParse)
+	p := &parser{l: l}
+	p.curtok = l.nextItem()
+	_, e := p.pFile()
+	if e == nil {
+		t.Fatalf("rules did not error out")
+	}
+	l.drain()
+	tok, ok := <-l.items
+	if ok {
+		t.Fatalf("lexer input was not drained properly: got %v", tok)
+	}
+}
+
 // Test DNS blocklist checks based on our artificial DNS blocklist cache
 // entries set up in setupContext().
 func TestDnsblHit(t *testing.T) {

@@ -641,5 +641,10 @@ func Parse(input string) (rules []*Rule, err error) {
 	// we must prime the current token with the first token in the
 	// file.
 	p.curtok = l.nextItem()
-	return p.pFile()
+	r, e := p.pFile()
+	// A parse error may have left the lexer with unconsumed input.
+	// We need to explicitly drain the lexer to deal with this and
+	// to terminate the goroutine.
+	l.drain()
+	return r, e
 }
