@@ -475,6 +475,21 @@ func (c *Conn) reply(format string, elems ...interface{}) {
 	}
 }
 
+// This is a crude hack for EHLO writing. It skips emitting the reply
+// line if we've already aborted (which is assumed to be because of a
+// write error). Some clients close the connection as we're writing
+// our multi-line EHLO reply out, which otherwise produces one error
+// per EHLO line instead of stopping immediately.
+//
+// This is kind of a code smell in that we're doing the EHLO reply
+// in the wrong way, but doing it the current way is also the easiest
+// and simplest way. Such is life.
+func (c *Conn) replyMore(format string, elems ...interface{}) {
+	if c.state != sAbort {
+		c.reply(format, elems...)
+	}
+}
+
 func (c *Conn) replyMulti(code int, format string, elems ...interface{}) {
 	rs := strings.Trim(fmt.Sprintf(format, elems...), " \t\n")
 	sl := strings.Split(rs, "\n")
@@ -568,12 +583,12 @@ func (c *Conn) Accept() {
 		c.reply("250-%s Hello %v", c.Config.LocalName, c.conn.RemoteAddr())
 		// We advertise 8BITMIME per
 		// http://cr.yp.to/smtp/8bitmime.html
-		c.reply("250-8BITMIME")
-		c.reply("250-PIPELINING")
+		c.replyMore("250-8BITMIME")
+		c.replyMore("250-PIPELINING")
 		// STARTTLS RFC says: MUST NOT advertise STARTTLS
 		// after TLS is on.
 		if c.Config.TLSConfig != nil && !c.TLSOn {
-			c.reply("250-STARTTLS")
+			c.replyMore("250-STARTTLS")
 		}
 		// RFC4954 notes: A server implementation MUST
 		// implement a configuration in which it does NOT
@@ -581,7 +596,7 @@ func (c *Conn) Accept() {
 		// either the STARTTLS [SMTP-TLS] command has been
 		// negotiated...
 		if c.Config.Auth != nil {
-			c.reply("250-AUTH " + strings.Join(c.authMechanisms(), " "))
+			c.replyMore("250-AUTH " + strings.Join(c.authMechanisms(), " "))
 		}
 		// We do not advertise SIZE because our size limits
 		// are different from the size limits that RFC 1870
@@ -593,7 +608,7 @@ func (c *Conn) Accept() {
 		// On the whole: pass. Cannot implement.
 		// (In general SIZE is hella annoying if you read the
 		// RFC religiously.)
-		c.reply("250 HELP")
+		c.replyMore("250 HELP")
 	case AUTH:
 		c.authDone(true)
 		c.reply("235 Authentication successful")
