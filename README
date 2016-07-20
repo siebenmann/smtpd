@@ -16,8 +16,7 @@ it to disk. This is obviously not suitable for production usage but
 it does make a potentially useful sink for spammers (which is what the
 author uses it for). This once was cmd/sinksmtp.go, but has become so
 large and complicated that it has moved out to its own repository,
-https://github.com/siebenmann/sinksmtp. The remaining code in cmd/
-is currently out of date and should be ignored.
+https://github.com/siebenmann/sinksmtp.
 
 Because of its origin as the core engine of a sinkhole SMTP server,
 smtpd is pretty casual about a lot of things in the SMTP protocol
