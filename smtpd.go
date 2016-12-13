@@ -61,6 +61,7 @@ const (
 	HELP
 	AUTH
 	STARTTLS
+	LHLO
 )
 
 // ParsedLine represents a parsed SMTP command line.  Err is set if
@@ -97,6 +98,7 @@ var smtpCommand = []struct {
 }{
 	{HELO, "HELO", canArg},
 	{EHLO, "EHLO", canArg},
+	{LHLO, "LHLO", canArg},
 	{MAILFROM, "MAIL FROM", colonAddress},
 	{RCPTTO, "RCPT TO", colonAddress},
 	{DATA, "DATA", noArg},
@@ -311,6 +313,7 @@ var states = map[Command]struct {
 }{
 	HELO:     {sInitial | sHelo, sHelo},
 	EHLO:     {sInitial | sHelo, sHelo},
+	LHLO:     {sInitial | sHelo, sHelo},
 	AUTH:     {sHelo, sHelo},
 	MAILFROM: {sHelo, sMail},
 	RCPTTO:   {sMail | sRcpt, sRcpt},
@@ -579,7 +582,7 @@ func (c *Conn) Accept() {
 	switch c.curcmd {
 	case HELO:
 		c.reply("250 %s Hello %v", c.Config.LocalName, c.conn.RemoteAddr())
-	case EHLO:
+	case EHLO, LHLO:
 		c.reply("250-%s Hello %v", c.Config.LocalName, c.conn.RemoteAddr())
 		// We advertise 8BITMIME per
 		// http://cr.yp.to/smtp/8bitmime.html
