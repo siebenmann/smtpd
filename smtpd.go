@@ -749,6 +749,58 @@ func (c *Conn) Tempfail() {
 	c.replied = true
 }
 
+// A variant of LmtpRejectMsg suitable for using in the responses to the DATA
+// command in LMTP. It won't advance the state machine, so multiple commands
+// can be issued under control of the caller.
+func (c *Conn) LmtpRejectMsg(format string, elems ...interface{}) {
+	c.RejectMsg(format, elems...)
+	if c.state == sPostData {
+		c.state = sData
+		c.nstate = sPostData
+	}
+	c.replied = false
+}
+
+// A variant of LmtpTempfailMsg suitable for using in the responses to the DATA
+// command in LMTP. It won't advance the state machine, so multiple commands
+// can be issued under control of the caller.
+func (c *Conn) LmtpTempfailMsg(format string, elems ...interface{}) {
+	c.TempfailMsg(format, elems...)
+	if c.state == sPostData {
+		c.state = sData
+		c.nstate = sPostData
+	}
+	c.replied = false
+}
+
+// A variant of LmtpAcceptMsg suitable for using in the responses to the DATA
+// command in LMTP. It won't advance the state machine, so multiple commands
+// can be issued under control of the caller.
+func (c *Conn) LmtpAcceptMsg(format string, elems ...interface{}) {
+	if c.curcmd == DATA {
+		c.replyMulti(250, format, elems...)
+	} else {
+		c.AcceptMsg(format, elems)
+	}
+
+	if c.state == sPostData {
+		c.state = sData
+		c.nstate = sPostData
+	}
+
+	c.replied = false
+}
+
+// Advance the protocol machine and prevent automatic responses, as with LMTP
+// the caller is driving the conversation and should have already replied.
+func (c *Conn) LmtpDataAccept() {
+	if c.replied {
+		return
+	}
+	c.state = c.nstate
+	c.replied = true
+}
+
 // mimeParam() returns true if the parameter argument of a MAIL FROM
 // is what we expect for a client exploiting our advertisement of
 // 8BITMIME.
