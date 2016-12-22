@@ -457,7 +457,9 @@ func (c *Conn) slowWrite(b []byte) (n int, err error) {
 func (c *Conn) reply(format string, elems ...interface{}) {
 	var err error
 	s := fmt.Sprintf(format, elems...)
-	c.log("w", s)
+	if c.logger != nil {
+		c.log("w", s)
+	}
 	b := []byte(s + "\r\n")
 	// we can ignore the length returned, because Write()'s contract
 	// is that it returns a non-nil err if n < len(b).
@@ -470,7 +472,9 @@ func (c *Conn) reply(format string, elems ...interface{}) {
 		_, err = c.conn.Write(b)
 	}
 	if err != nil {
-		c.log("!", "reply abort: %v", err)
+		if c.logger != nil {
+			c.log("!", "reply abort: %v", err)
+		}
 		c.state = sAbort
 	}
 }
@@ -522,10 +526,14 @@ func (c *Conn) readCmd() string {
 	if err != nil || c.lr.N == 0 {
 		c.state = sAbort
 		line = ""
-		c.log("!", "command abort %s err: %v",
-			fmtBytesLeft(2048, c.lr.N), err)
+		if c.logger != nil {
+			c.log("!", "command abort %s err: %v",
+				fmtBytesLeft(2048, c.lr.N), err)
+		}
 	} else {
-		c.log("r", line)
+		if c.logger != nil {
+			c.log("r", line)
+		}
 	}
 	return line
 }
@@ -537,10 +545,14 @@ func (c *Conn) readData() string {
 	if err != nil || c.lr.N == 0 {
 		c.state = sAbort
 		b = nil
-		c.log("!", "DATA abort %s err: %v",
-			fmtBytesLeft(c.Config.Limits.MsgSize, c.lr.N), err)
+		if c.logger != nil {
+			c.log("!", "DATA abort %s err: %v",
+				fmtBytesLeft(c.Config.Limits.MsgSize, c.lr.N), err)
+		}
 	} else {
-		c.log("r", ". <end of data>")
+		if c.logger != nil {
+			c.log("r", ". <end of data>")
+		}
 	}
 	return string(b)
 }
@@ -556,11 +568,15 @@ func (c *Conn) readAuthResp() string {
 	line, err := c.rdr.ReadLine()
 	if err != nil || c.lr.N == 0 {
 		c.state = sAbort
-		c.log("!", "auth input abort %s err: %v",
-			fmtBytesLeft(authInputLimit, c.lr.N), err)
+		if c.logger != nil {
+			c.log("!", "auth input abort %s err: %v",
+				fmtBytesLeft(authInputLimit, c.lr.N), err)
+		}
 		return ""
 	}
-	c.log("r", line)
+	if c.logger != nil {
+		c.log("r", line)
+	}
 	return line
 }
 
@@ -819,8 +835,10 @@ func (c *Conn) Next() EventInfo {
 		var announce string
 		c.state = sInitial
 		// log preceeds the banner in case the banner hits an error.
-		c.log("#", "remote %v at %s", c.conn.RemoteAddr(),
-			time.Now().Format(TimeFmt))
+		if c.logger != nil {
+			c.log("#", "remote %v at %s", c.conn.RemoteAddr(),
+				time.Now().Format(TimeFmt))
+		}
 		if c.Config.Announce != "" {
 			announce = "\n" + c.Config.Announce
 		}
@@ -841,7 +859,9 @@ func (c *Conn) Next() EventInfo {
 		data := c.readAuthResp()
 		if c.state == sAbort {
 			evt.What = ABORT
-			c.log("#", "abort at %v", time.Now().Format(TimeFmt))
+			if c.logger != nil {
+				c.log("#", "abort at %v", time.Now().Format(TimeFmt))
+			}
 			return evt
 		}
 		if data == "*" {
@@ -946,7 +966,9 @@ func (c *Conn) Next() EventInfo {
 				tlsConn := tls.Server(c.conn, c.Config.TLSConfig)
 				err := tlsConn.Handshake()
 				if err != nil {
-					c.log("!", "TLS setup failed: %v", err)
+					if c.logger != nil {
+						c.log("!", "TLS setup failed: %v", err)
+					}
 					c.state = sAbort
 					evt.What = TLSERROR
 					evt.Arg = fmt.Sprintf("%v", err)
@@ -962,9 +984,13 @@ func (c *Conn) Next() EventInfo {
 				c.TLSOn = true
 				c.TLSState = tlsConn.ConnectionState()
 				if c.TLSState.ServerName != "" {
-					c.log("!", "TLS negociated with cipher 0x%04x protocol 0x%04x server name '%s'", c.TLSState.CipherSuite, c.TLSState.Version, c.TLSState.ServerName)
+					if c.logger != nil {
+						c.log("!", "TLS negociated with cipher 0x%04x protocol 0x%04x server name '%s'", c.TLSState.CipherSuite, c.TLSState.Version, c.TLSState.ServerName)
+					}
 				} else {
-					c.log("!", "TLS negociated with cipher 0x%04x protocol 0x%04x", c.TLSState.CipherSuite, c.TLSState.Version)
+					if c.logger != nil {
+						c.log("!", "TLS negociated with cipher 0x%04x protocol 0x%04x", c.TLSState.CipherSuite, c.TLSState.Version)
+					}
 				}
 				// By the STARTTLS RFC, we return to our state
 				// immediately after the greeting banner
@@ -1061,10 +1087,14 @@ func (c *Conn) Next() EventInfo {
 	}
 	if c.state == sQuit {
 		evt.What = DONE
-		c.log("#", "finished at %v", time.Now().Format(TimeFmt))
+		if c.logger != nil {
+			c.log("#", "finished at %v", time.Now().Format(TimeFmt))
+		}
 	} else {
 		evt.What = ABORT
-		c.log("#", "abort at %v", time.Now().Format(TimeFmt))
+		if c.logger != nil {
+			c.log("#", "abort at %v", time.Now().Format(TimeFmt))
+		}
 	}
 	return evt
 }
