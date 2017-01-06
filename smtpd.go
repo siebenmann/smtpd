@@ -35,6 +35,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"strconv"
 )
 
 // The time format we log messages in.
@@ -422,6 +423,26 @@ const (
 	ABORT           // input or output error or timeout.
 	TLSERROR        // error during TLS setup. Connection is dead.
 )
+
+func (e Event) String() string {
+	switch e {
+	case COMMAND:
+		return "COMMAND"
+	case AUTHRESP:
+		return "AUTHRESP"
+	case AUTHABORT:
+		return "AUTHABORT"
+	case GOTDATA:
+		return "GOTDATA"
+	case DONE:
+		return "DONE"
+	case ABORT:
+		return "ABORT"
+	case TLSERROR:
+		return "TLSERROR"
+	}
+	return strconv.Itoa(int(e))
+}
 
 // EventInfo is what Conn.Next() returns to represent events.
 // Cmd and Arg come from ParsedLine.
