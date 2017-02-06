@@ -1283,41 +1283,36 @@ var errInvalidProxySyntax = errors.New("invalid syntax of PROXY")
 // described in "2.1. Human-readable header format (Version 1)"
 // http://www.haproxy.org/download/1.8/doc/proxy-protocol.txt
 // and produces two *net.TCPAddr if protocol part is "TCP4" or "TCP6".
-// Otherwise it returns nil for both addresses or non-nil error in case of
+// Otherwise it returns nil for addresses, -1 for ports, or non-nil error in case of
 // any other problem.
-func ParseProxyArg(s string) (src, dst *net.TCPAddr, err error) {
+func ParseProxyArg(s string) (src, dst net.IP, srcPort, dstPort int, err error) {
 	if s == "" {
-		return nil, nil, nil
+		return nil, nil, -1, -1, nil
 	}
 	if len(s) > 99 {
-		return nil, nil, errInvalidProxySyntax
+		return nil, nil, -1, -1, errInvalidProxySyntax
 	}
 	p := strings.Split(s, " ")
 	switch p[0] {
 	case "TCP4":
 	case "TCP6":
 	case "UNKNOWN":
-		return nil, nil, nil
+		return nil, nil, -1, -1, nil
 	default:
-		return nil, nil, errInvalidProxySyntax
+		return nil, nil, -1, -1, errInvalidProxySyntax
 	}
 	if len(p) != 5 {
-		return nil, nil, errInvalidProxySyntax
+		return nil, nil, -1, -1, errInvalidProxySyntax
 	}
-	if p[0] == "TCP4" {
-		return resolveTCPAddrs("tcp4", p[1]+":"+p[3], p[2]+":"+p[4])
-	}
-	return resolveTCPAddrs("tcp6", "["+p[1]+"]:"+p[3], "["+p[2]+"]:"+p[4])
-}
-
-func resolveTCPAddrs(n, s, d string) (src, dst *net.TCPAddr, err error) {
-	src, err = net.ResolveTCPAddr(n, s)
+	src = net.ParseIP(p[1])
+	dst = net.ParseIP(p[2])
+	srcPort, err = strconv.Atoi(p[3])
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, -1, -1, errInvalidProxySyntax
 	}
-	dst, err = net.ResolveTCPAddr(n, d)
+	dstPort, err = strconv.Atoi(p[4])
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, -1, -1, errInvalidProxySyntax
 	}
-	return src, dst, nil
+	return src, dst, srcPort, dstPort, nil
 }

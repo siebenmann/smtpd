@@ -647,75 +647,78 @@ QUIT
 	}
 }
 
-func mustTCPAddr(a *net.TCPAddr, e error) *net.TCPAddr {
-	if e != nil {
-		panic(e)
-	}
-	return a
-}
-
 func TestParseProxyArg(t *testing.T) {
 	samples := []struct {
-		arg string
-		src *net.TCPAddr
-		dst *net.TCPAddr
-		err error
+		a  string
+		s  net.IP
+		d  net.IP
+		sp int
+		dp int
+		e  error
 	}{
 		{
-			arg: "TCP4 255.255.255.254 255.255.255.255 65534 65535",
-			src: mustTCPAddr(net.ResolveTCPAddr("tcp4", "255.255.255.254:65534")),
-			dst: mustTCPAddr(net.ResolveTCPAddr("tcp4", "255.255.255.255:65535")),
-			err: nil,
+			a:  "TCP4 255.255.255.254 255.255.255.255 65534 65535",
+			s:  net.ParseIP("255.255.255.254"),
+			d:  net.ParseIP("255.255.255.255"),
+			sp: 65534,
+			dp: 65535,
+			e:  nil,
 		},
 		{
-			arg: "TCP6 ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff 65534 65535",
-			src: mustTCPAddr(net.ResolveTCPAddr("tcp6", "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe]:65534")),
-			dst: mustTCPAddr(net.ResolveTCPAddr("tcp6", "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535")),
-			err: nil,
+			a:  "TCP6 ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff 65534 65535",
+			s:  net.ParseIP("ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe"),
+			d:  net.ParseIP("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"),
+			sp: 65534,
+			dp: 65535,
+			e:  nil,
 		},
 		{
-			arg: "UNKNOWN ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff 65534 65535",
-			src: nil,
-			dst: nil,
-			err: nil,
+			a:  "UNKNOWN ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff 65534 65535",
+			s:  nil,
+			d:  nil,
+			sp: -1,
+			dp: -1,
+			e:  nil,
 		},
 		{
-			arg: "UNKNOWN",
-			src: nil,
-			dst: nil,
-			err: nil,
+			a:  "UNKNOWN",
+			s:  nil,
+			d:  nil,
+			sp: -1,
+			dp: -1,
+			e:  nil,
 		},
 		{
-			arg: "TCP7",
-			src: nil,
-			dst: nil,
-			err: errInvalidProxySyntax,
+			a:  "TCP7",
+			s:  nil,
+			d:  nil,
+			sp: -1,
+			dp: -1,
+			e:  errInvalidProxySyntax,
 		},
 		{
-			arg: "TCP4 255.255.255.254 255.255.255.255 65534 65535 SECURE",
-			src: nil,
-			dst: nil,
-			err: errInvalidProxySyntax,
+			a:  "TCP4 255.255.255.254 255.255.255.255 65534 65535 SECURE",
+			s:  nil,
+			d:  nil,
+			sp: -1,
+			dp: -1,
+			e:  errInvalidProxySyntax,
 		},
 		{
-			arg: "TCP4 SRC DST SRC_PORT DST_PORT",
-			src: nil,
-			dst: nil,
-			err: &net.DNSError{
-				Err:         "nodename nor servname provided, or not known",
-				Name:        "tcp4/SRC_PORT",
-				Server:      "",
-				IsTimeout:   false,
-				IsTemporary: false,
-			},
+			a:  "TCP4 SRC DST SRC_PORT DST_PORT",
+			s:  nil,
+			d:  nil,
+			sp: -1,
+			dp: -1,
+			e:  errInvalidProxySyntax,
 		},
 	}
 
 	for i, x := range samples {
-		s, d, e := ParseProxyArg(x.arg)
-		if reflect.DeepEqual(s, x.src) && reflect.DeepEqual(d, x.dst) && reflect.DeepEqual(e, x.err) {
+		s, d, sp, dp, e := ParseProxyArg(x.a)
+		if reflect.DeepEqual(s, x.s) && reflect.DeepEqual(d, x.d) && reflect.DeepEqual(sp, x.sp) && reflect.DeepEqual(dp, x.dp) && reflect.DeepEqual(e, x.e) {
 			continue
 		}
-		t.Errorf("#%d `%s`, want {%#v %#v %#v}, got {%#v %#v %#v}", i, x.arg, x.src, x.dst, x.err, s, d, e)
+		t.Errorf("#%d `%s`, want {%v %v %d %d %#v}, got {%v %v %d %d %#v}", i, x.a, x.s, x.d, x.sp, x.dp, x.e, s, d, sp, dp, e)
 	}
 }
