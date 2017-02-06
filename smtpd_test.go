@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"io"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -179,7 +180,7 @@ func (f faker) RemoteAddr() net.Addr {
 
 // returns expected server output \r\n'd, and the actual output.
 // current approach cribbed from the net/smtp tests.
-func runSmtpTest(
+func runSMTPTest(
 	serverStr, clientStr string,
 	config Config,
 	loop func(*Conn),
@@ -199,8 +200,8 @@ func runSmtpTest(
 	return server, outbuf.String()
 }
 
-func runSimpleSmtpTest(serverStr, clientStr string) (string, string) {
-	return runSmtpTest(serverStr, clientStr, Config{}, func(c *Conn) {
+func runSimpleSMTPTest(serverStr, clientStr string) (string, string) {
+	return runSMTPTest(serverStr, clientStr, Config{}, func(c *Conn) {
 		for {
 			evt := c.Next()
 			if evt.What == DONE || evt.What == ABORT {
@@ -211,7 +212,7 @@ func runSimpleSmtpTest(serverStr, clientStr string) (string, string) {
 }
 
 func TestBasicSmtpd(t *testing.T) {
-	server, actualout := runSimpleSmtpTest(basicServer, basicClient)
+	server, actualout := runSimpleSMTPTest(basicServer, basicClient)
 	if actualout != server {
 		t.Fatalf("Got:\n%s\nExpected:\n%s", actualout, server)
 	}
@@ -257,7 +258,7 @@ var basicServer = `220 localhost go-smtpd
 `
 
 func TestSequenceErrors(t *testing.T) {
-	server, actualout := runSimpleSmtpTest(sequenceServer, sequenceClient)
+	server, actualout := runSimpleSMTPTest(sequenceServer, sequenceClient)
 	if actualout != server {
 		t.Fatalf("Got:\n%s\nExpected:\n%s", actualout, server)
 	}
@@ -383,7 +384,7 @@ func TestAuthEvents(t *testing.T) {
 	cfg := Config{
 		Auth: &AuthConfig{Mechanisms: []string{"PLAIN", "LOGIN", "TEST"}},
 	}
-	server, actualout := runSmtpTest(authServer1, authClient1, cfg, func(c *Conn) {
+	server, actualout := runSMTPTest(authServer1, authClient1, cfg, func(c *Conn) {
 		var lastevt EventInfo
 		for {
 			evt := c.Next()
@@ -441,7 +442,7 @@ func TestAuthOnce(t *testing.T) {
 	cfg := Config{
 		Auth: &AuthConfig{Mechanisms: []string{"TEST"}},
 	}
-	server, actualout := runSmtpTest(authServer2, authClient2, cfg, func(c *Conn) {
+	server, actualout := runSMTPTest(authServer2, authClient2, cfg, func(c *Conn) {
 		for {
 			evt := c.Next()
 			if evt.What == DONE || evt.What == ABORT {
@@ -479,7 +480,7 @@ func TestAuthenticateSuccess(t *testing.T) {
 	cfg := Config{
 		Auth: &AuthConfig{Mechanisms: []string{"TEST"}},
 	}
-	server, actualout := runSmtpTest(authServer3, authClient3, cfg, func(c *Conn) {
+	server, actualout := runSMTPTest(authServer3, authClient3, cfg, func(c *Conn) {
 		for {
 			switch evt := c.Next(); evt.What {
 			case DONE:
@@ -554,7 +555,7 @@ func TestAuthenticateAborts(t *testing.T) {
 	cfg := Config{
 		Auth: &AuthConfig{Mechanisms: []string{"TEST"}},
 	}
-	server, actualout := runSmtpTest(authServer4, authClient4, cfg, func(c *Conn) {
+	server, actualout := runSMTPTest(authServer4, authClient4, cfg, func(c *Conn) {
 		for {
 			switch evt := c.Next(); evt.What {
 			case DONE:
@@ -579,5 +580,142 @@ func TestAuthenticateAborts(t *testing.T) {
 	})
 	if actualout != server {
 		t.Errorf("Server log mismatch, Got:\n%s\nExpected:\n%s", actualout, server)
+	}
+}
+
+// Test the stream of events emitted from Next(), as opposed to the output
+// that the server produces.
+func TestProxySequence(t *testing.T) {
+	var testStream = []struct {
+		what Event
+		cmd  Command
+	}{
+		{COMMAND, PROXY},
+		{COMMAND, EHLO},
+		{COMMAND, MAILFROM},
+		{COMMAND, RCPTTO},
+		{COMMAND, RCPTTO},
+		{COMMAND, DATA},
+		{GOTDATA, noCmd},
+		{COMMAND, MAILFROM},
+		{COMMAND, MAILFROM},
+		{DONE, noCmd},
+	}
+	var testClient = `PROXY TCP4 10.0.0.1 10.0.0.2 25 2525
+EHLO fred
+NOOP
+RSET
+RCPT TO:<barney@jim>
+MAIL FROM:<fred@fred>
+MAIL FROM:<fred@fred.com>
+PROXY UNKNOWN ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff 65535 65535
+RCPT TO:<>
+RCPT TO:<joe@joe.com>
+RCPT TO:<jane@jane.org>
+DATA
+Subject: A test.
+
+.
+RSET
+MAIL FROM:<joe@joe.com>
+RSET
+MAIL FROM:<joe@joe.com>
+QUIT
+`
+	client := strings.Join(strings.Split(testClient, "\n"), "\r\n")
+
+	var outbuf bytes.Buffer
+	writer := bufio.NewWriter(&outbuf)
+	reader := bufio.NewReader(strings.NewReader(client))
+	cxn := &faker{ReadWriter: bufio.NewReadWriter(reader, writer)}
+
+	// Server(reader, writer)
+	var evt EventInfo
+	conn := NewConn(cxn, Config{}, nil)
+	pos := 0
+	for {
+		evt = conn.Next()
+		ts := testStream[pos]
+		if evt.What != ts.what || evt.Cmd != ts.cmd {
+			t.Fatalf("Sequence mismatch at step %d: expected %v %v got %v %v\n",
+				pos, ts.what, ts.cmd, evt.What, evt.Cmd)
+		}
+		pos++
+		if evt.What == DONE {
+			break
+		}
+	}
+}
+
+func mustTCPAddr(a *net.TCPAddr, e error) *net.TCPAddr {
+	if e != nil {
+		panic(e)
+	}
+	return a
+}
+
+func TestParseProxyArg(t *testing.T) {
+	samples := []struct {
+		arg string
+		src *net.TCPAddr
+		dst *net.TCPAddr
+		err error
+	}{
+		{
+			arg: "TCP4 255.255.255.254 255.255.255.255 65534 65535",
+			src: mustTCPAddr(net.ResolveTCPAddr("tcp4", "255.255.255.254:65534")),
+			dst: mustTCPAddr(net.ResolveTCPAddr("tcp4", "255.255.255.255:65535")),
+			err: nil,
+		},
+		{
+			arg: "TCP6 ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff 65534 65535",
+			src: mustTCPAddr(net.ResolveTCPAddr("tcp6", "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe]:65534")),
+			dst: mustTCPAddr(net.ResolveTCPAddr("tcp6", "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535")),
+			err: nil,
+		},
+		{
+			arg: "UNKNOWN ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff 65534 65535",
+			src: nil,
+			dst: nil,
+			err: nil,
+		},
+		{
+			arg: "UNKNOWN",
+			src: nil,
+			dst: nil,
+			err: nil,
+		},
+		{
+			arg: "TCP7",
+			src: nil,
+			dst: nil,
+			err: errInvalidProxySyntax,
+		},
+		{
+			arg: "TCP4 255.255.255.254 255.255.255.255 65534 65535 SECURE",
+			src: nil,
+			dst: nil,
+			err: errInvalidProxySyntax,
+		},
+		{
+			arg: "TCP4 SRC DST SRC_PORT DST_PORT",
+			src: nil,
+			dst: nil,
+			err: &net.DNSError{
+				Err:         "nodename nor servname provided, or not known",
+				Name:        "tcp4/SRC_PORT",
+				Server:      "",
+				IsTimeout:   false,
+				IsTemporary: false,
+			},
+		},
+	}
+
+	for i, x := range samples {
+		s, d, e := ParseProxyArg(x.arg)
+		if reflect.DeepEqual(s, x.src) && reflect.DeepEqual(d, x.dst) && reflect.DeepEqual(e, x.err) {
+			continue
+		}
+		t.Errorf("#%d `%s`, want {%#v %#v %#v}, got {%#v %#v %#v}", i, x.arg, x.src, x.dst, x.err, s, d, e)
 	}
 }

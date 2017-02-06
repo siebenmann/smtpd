@@ -28,17 +28,18 @@ import (
 	"bufio"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/textproto"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
-	"strconv"
 )
 
-// The time format we log messages in.
+// TimeFmt is the format we log messages in.
 const TimeFmt = "2006-01-02 15:04:05 -0700"
 
 // Command represents known SMTP commands in encoded form.
@@ -62,6 +63,7 @@ const (
 	HELP
 	AUTH
 	STARTTLS
+	PROXY // http://www.haproxy.org/download/1.8/doc/proxy-protocol.txt (2.1. Human-readable header format (Version 1))
 )
 
 // ParsedLine represents a parsed SMTP command line.  Err is set if
@@ -109,6 +111,7 @@ var smtpCommand = []struct {
 	{HELP, "HELP", canArg},
 	{STARTTLS, "STARTTLS", noArg},
 	{AUTH, "AUTH", oneOrTwoArgs},
+	{PROXY, "PROXY", mustArg},
 	// TODO: do I need any additional SMTP commands?
 }
 
@@ -144,6 +147,11 @@ func isall7bit(b []byte) bool {
 // ParseCmd parses a SMTP command line and returns the result.
 // The line should have the ending CR-NL already removed.
 func ParseCmd(line string) ParsedLine {
+	const (
+		msgImporperArgument    = "improper argument formatting"
+		msgUnrecognizedCommand = "unrecognized command"
+		msgArgumentRequired    = "SMTP command requires an argument"
+	)
 	var res ParsedLine
 	res.Cmd = BadCmd
 
@@ -173,7 +181,7 @@ func ParseCmd(line string) ParsedLine {
 		}
 	}
 	if found == -1 {
-		res.Err = "unrecognized command"
+		res.Err = msgUnrecognizedCommand
 		return res
 	}
 
@@ -184,7 +192,7 @@ func ParseCmd(line string) ParsedLine {
 	llen := len(line)
 	clen := len(cmd.text)
 	if !(llen == clen || line[clen] == ' ' || line[clen] == ':') {
-		res.Err = "unrecognized command"
+		res.Err = msgUnrecognizedCommand
 		return res
 	}
 
@@ -201,7 +209,7 @@ func ParseCmd(line string) ParsedLine {
 		}
 	case mustArg:
 		if llen <= clen+1 {
-			res.Err = "SMTP command requires an argument"
+			res.Err = msgArgumentRequired
 			return res
 		}
 		// Even if there are nominal characters they could be
@@ -210,7 +218,7 @@ func ParseCmd(line string) ParsedLine {
 		// *before* the argument and we want to trim it too.
 		t := strings.TrimSpace(line[clen+1:])
 		if len(t) == 0 {
-			res.Err = "SMTP command requires an argument"
+			res.Err = msgArgumentRequired
 			return res
 		}
 		res.Arg = t
@@ -254,7 +262,7 @@ func ParseCmd(line string) ParsedLine {
 		} else {
 			idx = strings.IndexByte(line, '>')
 			if idx != -1 && line[idx+1] != ' ' {
-				res.Err = "improper argument formatting"
+				res.Err = msgImporperArgument
 				return res
 			}
 		}
@@ -263,7 +271,7 @@ func ParseCmd(line string) ParsedLine {
 		// the '<'. Normally we'd refuse to accept it, but a few too
 		// many things invalidly generate it.
 		if line[clen] != ':' || idx == -1 {
-			res.Err = "improper argument formatting"
+			res.Err = msgImporperArgument
 			return res
 		}
 		spos := clen + 1
@@ -271,7 +279,7 @@ func ParseCmd(line string) ParsedLine {
 			spos++
 		}
 		if line[spos] != '<' {
-			res.Err = "improper argument formatting"
+			res.Err = msgImporperArgument
 			return res
 		}
 		res.Arg = line[spos+1 : idx]
@@ -310,6 +318,7 @@ const (
 var states = map[Command]struct {
 	validin, next conState
 }{
+	PROXY:    {sInitial | sHelo, sHelo},
 	HELO:     {sInitial | sHelo, sHelo},
 	EHLO:     {sInitial | sHelo, sHelo},
 	AUTH:     {sHelo, sHelo},
@@ -333,7 +342,7 @@ type Limits struct {
 	NoParams bool          // reject MAIL FROM/RCPT TO with parameters
 }
 
-// The default limits that are applied if you do not specify anything.
+// DefaultLimits are applied if you do not specify anything.
 // Two minutes for command input and command replies, ten minutes for
 // receiving messages, and 5 Mbytes of message size.
 //
@@ -405,8 +414,9 @@ type Conn struct {
 	replied bool
 	nstate  conState // next state if command is accepted.
 
-	TLSOn    bool                // TLS is on in this connection
-	TLSState tls.ConnectionState // TLS connection state
+	TLSOn        bool                // TLS is on in this connection
+	TLSState     tls.ConnectionState // TLS connection state
+	ForwardedFor *net.TCPAddr        // TCP source address (IP:PORT) passed in PROXY command
 }
 
 // An Event is the sort of event that is returned by Conn.Next().
@@ -1265,4 +1275,49 @@ func NewConn(conn net.Conn, cfg Config, log io.Writer) *Conn {
 		c.Config.LocalName = "localhost"
 	}
 	return c
+}
+
+var errInvalidProxySyntax = errors.New("invalid syntax of PROXY")
+
+// ParseProxy parses arguments of PROXY command from a string formatted as
+// described in "2.1. Human-readable header format (Version 1)"
+// http://www.haproxy.org/download/1.8/doc/proxy-protocol.txt
+// and produces two *net.TCPAddr if protocol part is "TCP4" or "TCP6".
+// Otherwise it returns nil for both addresses or non-nil error in case of
+// any other problem.
+func ParseProxyArg(s string) (src, dst *net.TCPAddr, err error) {
+	if s == "" {
+		return nil, nil, nil
+	}
+	if len(s) > 99 {
+		return nil, nil, errInvalidProxySyntax
+	}
+	p := strings.Split(s, " ")
+	switch p[0] {
+	case "TCP4":
+	case "TCP6":
+	case "UNKNOWN":
+		return nil, nil, nil
+	default:
+		return nil, nil, errInvalidProxySyntax
+	}
+	if len(p) != 5 {
+		return nil, nil, errInvalidProxySyntax
+	}
+	if p[0] == "TCP4" {
+		return resolveTCPAddrs("tcp4", p[1]+":"+p[3], p[2]+":"+p[4])
+	}
+	return resolveTCPAddrs("tcp6", "["+p[1]+"]:"+p[3], "["+p[2]+"]:"+p[4])
+}
+
+func resolveTCPAddrs(n, s, d string) (src, dst *net.TCPAddr, err error) {
+	src, err = net.ResolveTCPAddr(n, s)
+	if err != nil {
+		return nil, nil, err
+	}
+	dst, err = net.ResolveTCPAddr(n, d)
+	if err != nil {
+		return nil, nil, err
+	}
+	return src, dst, nil
 }
