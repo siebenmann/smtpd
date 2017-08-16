@@ -818,7 +818,7 @@ func (c *Conn) Next() EventInfo {
 	if c.state == sStartup {
 		var announce string
 		c.state = sInitial
-		// log preceeds the banner in case the banner hits an error.
+		// log precedes the banner in case the banner hits an error.
 		c.log("#", "remote %v at %s", c.conn.RemoteAddr(),
 			time.Now().Format(TimeFmt))
 		if c.Config.Announce != "" {
@@ -962,9 +962,9 @@ func (c *Conn) Next() EventInfo {
 				c.TLSOn = true
 				c.TLSState = tlsConn.ConnectionState()
 				if c.TLSState.ServerName != "" {
-					c.log("!", "TLS negociated with cipher 0x%04x protocol 0x%04x server name '%s'", c.TLSState.CipherSuite, c.TLSState.Version, c.TLSState.ServerName)
+					c.log("!", "TLS negotiated with cipher 0x%04x protocol 0x%04x server name '%s'", c.TLSState.CipherSuite, c.TLSState.Version, c.TLSState.ServerName)
 				} else {
-					c.log("!", "TLS negociated with cipher 0x%04x protocol 0x%04x", c.TLSState.CipherSuite, c.TLSState.Version)
+					c.log("!", "TLS negotiated with cipher 0x%04x protocol 0x%04x", c.TLSState.CipherSuite, c.TLSState.Version)
 				}
 				// By the STARTTLS RFC, we return to our state
 				// immediately after the greeting banner
