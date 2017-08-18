@@ -1,10 +1,10 @@
-Smtpd is a Go package for handling the server side of the SMTP protocol.
-It does not handle high level details like what addresses should be
+Smtpd is a Go package for handling the server side of the LMTP & SMTP
+protocol. It does not handle high level details like what addresses should be
 accepted or what should happen with email once it has been fully received;
-those decisions are instead delegated to whatever is driving smtpd.
-Smtpd's purpose is simply to handle the grunt work of a reasonably
-RFC compliant SMTP server, taking care of things like proper command
-sequencing, TLS, and basic correctness of some things.
+those decisions are instead delegated to whatever is driving smtpd. Smtpd's
+purpose is simply to handle the grunt work of a reasonably RFC compliant SMTP
+server, taking care of things like proper command sequencing, TLS, and basic
+correctness of some things.
 
 (The standard library net/smtp package handles only the client side
 of SMTP; it makes no attempt to provide the facilities you'd need to
