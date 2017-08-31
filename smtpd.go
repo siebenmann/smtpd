@@ -37,7 +37,7 @@ import (
 	"unicode"
 )
 
-// The time format we log messages in.
+// TimeFmt is the time format we log messages in.
 const TimeFmt = "2006-01-02 15:04:05 -0700"
 
 // Command represents known SMTP commands in encoded form.
@@ -332,9 +332,10 @@ type Limits struct {
 	NoParams bool          // reject MAIL FROM/RCPT TO with parameters
 }
 
-// The default limits that are applied if you do not specify anything.
-// Two minutes for command input and command replies, ten minutes for
-// receiving messages, and 5 Mbytes of message size.
+// DefaultLimits is the default limits that are applied if you do not
+// specify anything.  Two minutes for command input and command
+// replies, ten minutes for receiving messages, and 5 Mbytes of
+// message size.
 //
 // Note that these limits are not necessarily RFC compliant, although
 // they should be enough for real email clients.
