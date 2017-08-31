@@ -179,7 +179,7 @@ func (f faker) RemoteAddr() net.Addr {
 
 // returns expected server output \r\n'd, and the actual output.
 // current approach cribbed from the net/smtp tests.
-func runSmtpTest(
+func runSMTPTest(
 	serverStr, clientStr string,
 	config Config,
 	loop func(*Conn),
@@ -199,8 +199,8 @@ func runSmtpTest(
 	return server, outbuf.String()
 }
 
-func runSimpleSmtpTest(serverStr, clientStr string) (string, string) {
-	return runSmtpTest(serverStr, clientStr, Config{}, func(c *Conn) {
+func runSimpleSMTPTest(serverStr, clientStr string) (string, string) {
+	return runSMTPTest(serverStr, clientStr, Config{}, func(c *Conn) {
 		for {
 			evt := c.Next()
 			if evt.What == DONE || evt.What == ABORT {
@@ -211,7 +211,7 @@ func runSimpleSmtpTest(serverStr, clientStr string) (string, string) {
 }
 
 func TestBasicSmtpd(t *testing.T) {
-	server, actualout := runSimpleSmtpTest(basicServer, basicClient)
+	server, actualout := runSimpleSMTPTest(basicServer, basicClient)
 	if actualout != server {
 		t.Fatalf("Got:\n%s\nExpected:\n%s", actualout, server)
 	}
@@ -257,7 +257,7 @@ var basicServer = `220 localhost go-smtpd
 `
 
 func TestSequenceErrors(t *testing.T) {
-	server, actualout := runSimpleSmtpTest(sequenceServer, sequenceClient)
+	server, actualout := runSimpleSMTPTest(sequenceServer, sequenceClient)
 	if actualout != server {
 		t.Fatalf("Got:\n%s\nExpected:\n%s", actualout, server)
 	}
@@ -383,7 +383,7 @@ func TestAuthEvents(t *testing.T) {
 	cfg := Config{
 		Auth: &AuthConfig{Mechanisms: []string{"PLAIN", "LOGIN", "TEST"}},
 	}
-	server, actualout := runSmtpTest(authServer1, authClient1, cfg, func(c *Conn) {
+	server, actualout := runSMTPTest(authServer1, authClient1, cfg, func(c *Conn) {
 		var lastevt EventInfo
 		for {
 			evt := c.Next()
@@ -441,7 +441,7 @@ func TestAuthOnce(t *testing.T) {
 	cfg := Config{
 		Auth: &AuthConfig{Mechanisms: []string{"TEST"}},
 	}
-	server, actualout := runSmtpTest(authServer2, authClient2, cfg, func(c *Conn) {
+	server, actualout := runSMTPTest(authServer2, authClient2, cfg, func(c *Conn) {
 		for {
 			evt := c.Next()
 			if evt.What == DONE || evt.What == ABORT {
@@ -479,7 +479,7 @@ func TestAuthenticateSuccess(t *testing.T) {
 	cfg := Config{
 		Auth: &AuthConfig{Mechanisms: []string{"TEST"}},
 	}
-	server, actualout := runSmtpTest(authServer3, authClient3, cfg, func(c *Conn) {
+	server, actualout := runSMTPTest(authServer3, authClient3, cfg, func(c *Conn) {
 		for {
 			switch evt := c.Next(); evt.What {
 			case DONE:
@@ -554,7 +554,7 @@ func TestAuthenticateAborts(t *testing.T) {
 	cfg := Config{
 		Auth: &AuthConfig{Mechanisms: []string{"TEST"}},
 	}
-	server, actualout := runSmtpTest(authServer4, authClient4, cfg, func(c *Conn) {
+	server, actualout := runSMTPTest(authServer4, authClient4, cfg, func(c *Conn) {
 		for {
 			switch evt := c.Next(); evt.What {
 			case DONE:
