@@ -522,8 +522,10 @@ func (c *Conn) readCmd() string {
 	if err != nil || c.lr.N == 0 {
 		c.state = sAbort
 		line = ""
-		c.log("!", "command abort %s err: %v",
-			fmtBytesLeft(2048, c.lr.N), err)
+		if err != io.EOF {
+			c.log("!", "command abort %s err: %v",
+				fmtBytesLeft(2048, c.lr.N), err)
+		}
 	} else {
 		c.log("r", line)
 	}
