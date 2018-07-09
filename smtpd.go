@@ -414,9 +414,10 @@ type Conn struct {
 	replied bool
 	nstate  conState // next state if command is accepted.
 
-	TLSOn        bool                // TLS is on in this connection
-	TLSState     tls.ConnectionState // TLS connection state
-	ForwardedFor *net.TCPAddr        // TCP source address (IP:PORT) passed in PROXY command
+	TLSOn              bool                 // TLS is on in this connection
+	TLSState           tls.ConnectionState  // TLS connection state
+	TLSClientHelloInfo *tls.ClientHelloInfo // ClientHelloInfo contains information from a ClientHello message
+	ForwardedFor       *net.TCPAddr         // TCP source address (IP:PORT) passed in PROXY command
 }
 
 // An Event is the sort of event that is returned by Conn.Next().
@@ -994,7 +995,23 @@ func (c *Conn) Next() EventInfo {
 				// must reset both read and write timeouts
 				// to our TLS setup timeout.
 				c.conn.SetDeadline(time.Now().Add(c.Config.Limits.TLSSetup))
-				tlsConn := tls.Server(c.conn, c.Config.TLSConfig)
+
+				// TODO (dmotylev) Using RemoteAddr as a key for ClientHelloInfo may be more efficient way than cloning TLSConfig
+				cfg := c.Config.TLSConfig.Clone()
+
+				getCertificate := cfg.GetCertificate
+
+				var tlsClientHelloInfo *tls.ClientHelloInfo
+
+				cfg.GetCertificate = func(i *tls.ClientHelloInfo) (*tls.Certificate, error) {
+					tlsClientHelloInfo = i
+					if getCertificate == nil {
+						return nil, nil
+					}
+					return getCertificate(i)
+				}
+
+				tlsConn := tls.Server(c.conn, cfg)
 				err := tlsConn.Handshake()
 				if err != nil {
 					if c.logger != nil {
@@ -1014,6 +1031,7 @@ func (c *Conn) Next() EventInfo {
 				c.setupConn(tlsConn)
 				c.TLSOn = true
 				c.TLSState = tlsConn.ConnectionState()
+				c.TLSClientHelloInfo = tlsClientHelloInfo
 				if c.TLSState.ServerName != "" {
 					if c.logger != nil {
 						c.log("!", "TLS negociated with cipher 0x%04x protocol 0x%04x server name '%s'", c.TLSState.CipherSuite, c.TLSState.Version, c.TLSState.ServerName)
