@@ -999,16 +999,16 @@ func (c *Conn) Next() EventInfo {
 				// TODO (dmotylev) Using RemoteAddr as a key for ClientHelloInfo may be more efficient way than cloning TLSConfig
 				cfg := c.Config.TLSConfig.Clone()
 
-				getCertificate := cfg.GetCertificate
+				getConfigForClient := cfg.GetConfigForClient
 
 				var tlsClientHelloInfo *tls.ClientHelloInfo
 
-				cfg.GetCertificate = func(i *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				cfg.GetConfigForClient = func(i *tls.ClientHelloInfo) (*tls.Config, error) {
 					tlsClientHelloInfo = i
-					if getCertificate == nil {
+					if getConfigForClient == nil {
 						return nil, nil
 					}
-					return getCertificate(i)
+					return getConfigForClient(i)
 				}
 
 				tlsConn := tls.Server(c.conn, cfg)
