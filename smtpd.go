@@ -924,6 +924,7 @@ func (c *Conn) Next() EventInfo {
 		}
 		// If the data read failed, c.state will be sAbort and we
 		// will exit in the main loop.
+		c.reply("554 Message to big for system")
 	}
 
 	// Main command loop.
