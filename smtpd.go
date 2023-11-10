@@ -1,4 +1,3 @@
-//
 // Package smtpd handles the low level of the server side of the SMTP
 // protocol. It does not handle high level details like what addresses
 // should be accepted or what should happen with email once it has
@@ -19,7 +18,6 @@
 // limits on input messages (and input lines, but that's much larger
 // than the RFC requires so it shouldn't matter). See DefaultLimits
 // and SetLimits().
-//
 package smtpd
 
 // See http://en.wikipedia.org/wiki/Extended_SMTP#Extensions
@@ -27,6 +25,7 @@ package smtpd
 import (
 	"bufio"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -755,6 +754,32 @@ func mimeParam(l ParsedLine) bool {
 		(l.Params == "BODY=7BIT" || l.Params == "BODY=8BITMIME")
 }
 
+func tlsName(cert *x509.Certificate) string {
+	if cert.Subject.CommonName != "" {
+		return cert.Subject.CommonName
+	}
+	if len(cert.DNSNames) > 0 {
+		return cert.DNSNames[0]
+	}
+	return "<no CN or DNS Names>"
+}
+
+func tlsExtraInfo(state tls.ConnectionState) string {
+	var info []string
+	if state.ServerName != "" {
+		info = append(info, fmt.Sprintf("server name '%s'", state.ServerName))
+	}
+	if len(state.VerifiedChains) > 0 {
+		info = append(info, fmt.Sprintf("verified name '%s'", tlsName(state.VerifiedChains[0][0])))
+	} else if len(state.PeerCertificates) > 0 {
+		info = append(info, fmt.Sprintf("peer name '%s'", tlsName(state.PeerCertificates[0])))
+	}
+	if len(info) == 0 {
+		return ""
+	}
+	return " " + strings.Join(info, " ")
+}
+
 // Next returns the next high-level event from the SMTP connection.
 //
 // Next() guarantees that the SMTP protocol ordering requirements are
@@ -962,11 +987,9 @@ func (c *Conn) Next() EventInfo {
 				c.setupConn(tlsConn)
 				c.TLSOn = true
 				c.TLSState = tlsConn.ConnectionState()
-				if c.TLSState.ServerName != "" {
-					c.log("!", "TLS negotiated with cipher 0x%04x protocol 0x%04x server name '%s'", c.TLSState.CipherSuite, c.TLSState.Version, c.TLSState.ServerName)
-				} else {
-					c.log("!", "TLS negotiated with cipher 0x%04x protocol 0x%04x", c.TLSState.CipherSuite, c.TLSState.Version)
-				}
+				c.log("!", "TLS negotiated with cipher cipher 0x%04x protocol 0x%04x%s",
+					c.TLSState.CipherSuite, c.TLSState.Version,
+					tlsExtraInfo(c.TLSState))
 				// By the STARTTLS RFC, we return to our state
 				// immediately after the greeting banner
 				// and clients must re-EHLO.
