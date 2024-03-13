@@ -1,4 +1,3 @@
-//
 // Package smtpd handles the low level of the server side of the SMTP
 // protocol. It does not handle high level details like what addresses
 // should be accepted or what should happen with email once it has
@@ -19,7 +18,6 @@
 // limits on input messages (and input lines, but that's much larger
 // than the RFC requires so it shouldn't matter). See DefaultLimits
 // and SetLimits().
-//
 package smtpd
 
 // See http://en.wikipedia.org/wiki/Extended_SMTP#Extensions
@@ -1296,7 +1294,10 @@ func NewConn(conn net.Conn, cfg Config, log io.Writer) *Conn {
 	return c
 }
 
-var errInvalidProxySyntax = errors.New("invalid syntax of PROXY")
+var (
+	ErrInvalidProxySyntax = errors.New("invalid syntax of PROXY")
+	ErrUnknownProtocol    = errors.New("unknown protocol")
+)
 
 // ParseProxy parses arguments of PROXY command from a string formatted as
 // described in "2.1. Human-readable header format (Version 1)"
@@ -1309,29 +1310,29 @@ func ParseProxyArg(s string) (src, dst net.IP, srcPort, dstPort int, err error) 
 		return nil, nil, -1, -1, nil
 	}
 	if len(s) > 99 {
-		return nil, nil, -1, -1, errInvalidProxySyntax
+		return nil, nil, -1, -1, ErrInvalidProxySyntax
 	}
 	p := strings.Split(s, " ")
 	switch p[0] {
 	case "TCP4":
 	case "TCP6":
 	case "UNKNOWN":
-		return nil, nil, -1, -1, nil
+		return nil, nil, -1, -1, ErrUnknownProtocol
 	default:
-		return nil, nil, -1, -1, errInvalidProxySyntax
+		return nil, nil, -1, -1, ErrInvalidProxySyntax
 	}
 	if len(p) != 5 {
-		return nil, nil, -1, -1, errInvalidProxySyntax
+		return nil, nil, -1, -1, ErrInvalidProxySyntax
 	}
 	src = net.ParseIP(p[1])
 	dst = net.ParseIP(p[2])
 	srcPort, err = strconv.Atoi(p[3])
 	if err != nil {
-		return nil, nil, -1, -1, errInvalidProxySyntax
+		return nil, nil, -1, -1, ErrInvalidProxySyntax
 	}
 	dstPort, err = strconv.Atoi(p[4])
 	if err != nil {
-		return nil, nil, -1, -1, errInvalidProxySyntax
+		return nil, nil, -1, -1, ErrInvalidProxySyntax
 	}
 	return src, dst, srcPort, dstPort, nil
 }

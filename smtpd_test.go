@@ -678,7 +678,7 @@ func TestParseProxyArg(t *testing.T) {
 			d:  nil,
 			sp: -1,
 			dp: -1,
-			e:  nil,
+			e:  ErrUnknownProtocol,
 		},
 		{
 			a:  "UNKNOWN",
@@ -686,7 +686,7 @@ func TestParseProxyArg(t *testing.T) {
 			d:  nil,
 			sp: -1,
 			dp: -1,
-			e:  nil,
+			e:  ErrUnknownProtocol,
 		},
 		{
 			a:  "TCP7",
@@ -694,7 +694,7 @@ func TestParseProxyArg(t *testing.T) {
 			d:  nil,
 			sp: -1,
 			dp: -1,
-			e:  errInvalidProxySyntax,
+			e:  ErrInvalidProxySyntax,
 		},
 		{
 			a:  "TCP4 255.255.255.254 255.255.255.255 65534 65535 SECURE",
@@ -702,7 +702,7 @@ func TestParseProxyArg(t *testing.T) {
 			d:  nil,
 			sp: -1,
 			dp: -1,
-			e:  errInvalidProxySyntax,
+			e:  ErrInvalidProxySyntax,
 		},
 		{
 			a:  "TCP4 SRC DST SRC_PORT DST_PORT",
@@ -710,7 +710,7 @@ func TestParseProxyArg(t *testing.T) {
 			d:  nil,
 			sp: -1,
 			dp: -1,
-			e:  errInvalidProxySyntax,
+			e:  ErrInvalidProxySyntax,
 		},
 	}
 
