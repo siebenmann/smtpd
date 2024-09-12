@@ -60,6 +60,7 @@ const (
 	HELP
 	AUTH
 	STARTTLS
+	LHLO
 )
 
 // ParsedLine represents a parsed SMTP command line.  Err is set if
@@ -96,6 +97,7 @@ var smtpCommand = []struct {
 }{
 	{HELO, "HELO", canArg},
 	{EHLO, "EHLO", canArg},
+	{LHLO, "LHLO", canArg},
 	{MAILFROM, "MAIL FROM", colonAddress},
 	{RCPTTO, "RCPT TO", colonAddress},
 	{DATA, "DATA", noArg},
@@ -310,6 +312,7 @@ var states = map[Command]struct {
 }{
 	HELO:     {sInitial | sHelo, sHelo},
 	EHLO:     {sInitial | sHelo, sHelo},
+	LHLO:     {sInitial | sHelo, sHelo},
 	AUTH:     {sHelo, sHelo},
 	MAILFROM: {sHelo, sMail},
 	RCPTTO:   {sMail | sRcpt, sRcpt},
@@ -579,7 +582,7 @@ func (c *Conn) Accept() {
 	switch c.curcmd {
 	case HELO:
 		c.reply("250 %s Hello %v", c.Config.LocalName, c.conn.RemoteAddr())
-	case EHLO:
+	case EHLO, LHLO:
 		c.reply("250-%s Hello %v", c.Config.LocalName, c.conn.RemoteAddr())
 		// We advertise 8BITMIME per
 		// http://cr.yp.to/smtp/8bitmime.html
@@ -743,6 +746,58 @@ func (c *Conn) Tempfail() {
 	case MAILFROM, RCPTTO, DATA:
 		c.reply("450 Not available")
 	}
+	c.replied = true
+}
+
+// A variant of LmtpRejectMsg suitable for using in the responses to the DATA
+// command in LMTP. It won't advance the state machine, so multiple commands
+// can be issued under control of the caller.
+func (c *Conn) LmtpRejectMsg(format string, elems ...interface{}) {
+	c.RejectMsg(format, elems...)
+	if c.state == sPostData {
+		c.state = sData
+		c.nstate = sPostData
+	}
+	c.replied = false
+}
+
+// A variant of LmtpTempfailMsg suitable for using in the responses to the DATA
+// command in LMTP. It won't advance the state machine, so multiple commands
+// can be issued under control of the caller.
+func (c *Conn) LmtpTempfailMsg(format string, elems ...interface{}) {
+	c.TempfailMsg(format, elems...)
+	if c.state == sPostData {
+		c.state = sData
+		c.nstate = sPostData
+	}
+	c.replied = false
+}
+
+// A variant of LmtpAcceptMsg suitable for using in the responses to the DATA
+// command in LMTP. It won't advance the state machine, so multiple commands
+// can be issued under control of the caller.
+func (c *Conn) LmtpAcceptMsg(format string, elems ...interface{}) {
+	if c.curcmd == DATA {
+		c.replyMulti(250, format, elems...)
+	} else {
+		c.AcceptMsg(format, elems)
+	}
+
+	if c.state == sPostData {
+		c.state = sData
+		c.nstate = sPostData
+	}
+
+	c.replied = false
+}
+
+// Advance the protocol machine and prevent automatic responses, as with LMTP
+// the caller is driving the conversation and should have already replied.
+func (c *Conn) LmtpDataAccept() {
+	if c.replied {
+		return
+	}
+	c.state = c.nstate
 	c.replied = true
 }
 
