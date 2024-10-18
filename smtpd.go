@@ -457,7 +457,7 @@ func (c *Conn) slowWrite(b []byte) (n int, err error) {
 func (c *Conn) reply(format string, elems ...interface{}) {
 	var err error
 	s := fmt.Sprintf(format, elems...)
-	c.log("w", s)
+	c.log("w", "%s", s)
 	b := []byte(s + "\r\n")
 	// we can ignore the length returned, because Write()'s contract
 	// is that it returns a non-nil err if n < len(b).
@@ -525,7 +525,7 @@ func (c *Conn) readCmd() string {
 		c.log("!", "command abort %s err: %v",
 			fmtBytesLeft(2048, c.lr.N), err)
 	} else {
-		c.log("r", line)
+		c.log("r", "%s", line)
 	}
 	return line
 }
@@ -560,7 +560,7 @@ func (c *Conn) readAuthResp() string {
 			fmtBytesLeft(authInputLimit, c.lr.N), err)
 		return ""
 	}
-	c.log("r", line)
+	c.log("r", "%s", line)
 	return line
 }
 
@@ -596,7 +596,7 @@ func (c *Conn) Accept() {
 		// either the STARTTLS [SMTP-TLS] command has been
 		// negotiated...
 		if c.Config.Auth != nil {
-			c.replyMore("250-AUTH " + strings.Join(c.authMechanisms(), " "))
+			c.replyMore("250-AUTH %s", strings.Join(c.authMechanisms(), " "))
 		}
 		// We do not advertise SIZE because our size limits
 		// are different from the size limits that RFC 1870
@@ -1137,7 +1137,7 @@ func (c *Conn) AuthChallenge(data []byte) {
 	if c.state != sAuth || c.replied {
 		return
 	}
-	c.reply("334 " + base64.StdEncoding.EncodeToString(data))
+	c.reply("334 %s", base64.StdEncoding.EncodeToString(data))
 	c.replied = true
 }
 
