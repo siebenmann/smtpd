@@ -23,6 +23,7 @@ package smtpd
 // See http://en.wikipedia.org/wiki/Extended_SMTP#Extensions
 
 import (
+	"slices"
 	"bufio"
 	"crypto/tls"
 	"crypto/x509"
@@ -431,7 +432,7 @@ type EventInfo struct {
 	Arg  string
 }
 
-func (c *Conn) log(dir string, format string, elems ...interface{}) {
+func (c *Conn) log(dir string, format string, elems ...any) {
 	if c.logger == nil {
 		return
 	}
@@ -454,7 +455,7 @@ func (c *Conn) slowWrite(b []byte) (n int, err error) {
 	return cnt, err
 }
 
-func (c *Conn) reply(format string, elems ...interface{}) {
+func (c *Conn) reply(format string, elems ...any) {
 	var err error
 	s := fmt.Sprintf(format, elems...)
 	c.log("w", "%s", s)
@@ -484,13 +485,13 @@ func (c *Conn) reply(format string, elems ...interface{}) {
 // This is kind of a code smell in that we're doing the EHLO reply
 // in the wrong way, but doing it the current way is also the easiest
 // and simplest way. Such is life.
-func (c *Conn) replyMore(format string, elems ...interface{}) {
+func (c *Conn) replyMore(format string, elems ...any) {
 	if c.state != sAbort {
 		c.reply(format, elems...)
 	}
 }
 
-func (c *Conn) replyMulti(code int, format string, elems ...interface{}) {
+func (c *Conn) replyMulti(code int, format string, elems ...any) {
 	rs := strings.Trim(fmt.Sprintf(format, elems...), " \t\n")
 	sl := strings.Split(rs, "\n")
 	cont := '-'
@@ -633,7 +634,7 @@ func (c *Conn) Accept() {
 // generated message may include embedded newlines for a multi-line
 // reply.  This cannot be applied to EHLO/HELO messages; if called for
 // one of them, it is equivalent to Accept().
-func (c *Conn) AcceptMsg(format string, elems ...interface{}) {
+func (c *Conn) AcceptMsg(format string, elems ...any) {
 	if c.curcmd == HELO || c.curcmd == EHLO || c.replied {
 		// We can't apply to EHLO/HELO because those have
 		// special formatting requirements, especially EHLO.
@@ -700,7 +701,7 @@ func (c *Conn) Reject() {
 // RejectMsg rejects the current SMTP command with the fmt.Printf
 // style message that you supply. The generated message may include
 // embedded newlines for a multi-line reply.
-func (c *Conn) RejectMsg(format string, elems ...interface{}) {
+func (c *Conn) RejectMsg(format string, elems ...any) {
 	switch c.curcmd {
 	case HELO, EHLO, MAILFROM, RCPTTO:
 		c.replyMulti(550, format, elems...)
@@ -717,7 +718,7 @@ func (c *Conn) RejectMsg(format string, elems ...interface{}) {
 // a 4xx code and the fmt.Printf style message that you supply.
 // The generated message may include embedded newlines for a
 // multi-line reply.
-func (c *Conn) TempfailMsg(format string, elems ...interface{}) {
+func (c *Conn) TempfailMsg(format string, elems ...any) {
 	switch c.curcmd {
 	case HELO, EHLO:
 		c.replyMulti(421, format, elems...)
@@ -1116,12 +1117,7 @@ func (c *Conn) authMechanisms() []string {
 
 func (c *Conn) authMechanismValid(mech string) bool {
 	mech = strings.ToUpper(mech)
-	for _, m := range c.authMechanisms() {
-		if mech == m {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(c.authMechanisms(), mech)
 }
 
 // authDone marks a RFC4954 AUTH sequence as being done (whether it
