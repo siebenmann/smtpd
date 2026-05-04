@@ -987,8 +987,10 @@ func (c *Conn) Next() EventInfo {
 				c.setupConn(tlsConn)
 				c.TLSOn = true
 				c.TLSState = tlsConn.ConnectionState()
-				c.log("!", "TLS negotiated with cipher 0x%04x protocol 0x%04x%s",
+				c.log("!", "TLS negotiated with cipher 0x%04x protocol 0x%04x (%s:%s)%s",
 					c.TLSState.CipherSuite, c.TLSState.Version,
+					tls.VersionName(c.TLSState.Version),
+					tls.CipherSuiteName(c.TLSState.CipherSuite),
 					tlsExtraInfo(c.TLSState))
 				// By the STARTTLS RFC, we return to our state
 				// immediately after the greeting banner
